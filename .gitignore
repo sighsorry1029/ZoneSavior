@@ -1,0 +1,9 @@
+bin/
+obj/
+/packages/
+*.zip
+riderModule.iml
+/_ReSharper.Caches/
+.idea/
+.vs/
+ZoneSavior.sln.DotSettings.user
