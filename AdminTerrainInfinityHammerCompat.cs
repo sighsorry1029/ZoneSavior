@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using BepInEx.Bootstrap;
 using BepInEx.Logging;
 using HarmonyLib;
 using UnityEngine;
@@ -13,6 +14,7 @@ internal static class AdminTerrainInfinityHammerCompat
     private static bool _available;
     private static bool _patched;
     private static bool _saveDataConfigured;
+    private static Type? _configurationType;
 
     public static void Initialize(ManualLogSource logger, Harmony harmony)
     {
@@ -22,7 +24,8 @@ internal static class AdminTerrainInfinityHammerCompat
             return;
         }
 
-        _available = AccessTools.TypeByName("InfinityHammer.Configuration") != null;
+        _configurationType = FindLoadedType("InfinityHammer.Configuration");
+        _available = _configurationType != null;
         if (!_available)
         {
             _logger.LogDebug("Infinity Hammer compat skipped: Infinity Hammer is not loaded.");
@@ -66,6 +69,21 @@ internal static class AdminTerrainInfinityHammerCompat
     {
         _patched = false;
         _saveDataConfigured = false;
+        _configurationType = null;
+    }
+
+    private static Type? FindLoadedType(string fullName)
+    {
+        foreach (var pluginInfo in Chainloader.PluginInfos.Values)
+        {
+            Type? type = pluginInfo.Instance?.GetType().Assembly.GetType(fullName, throwOnError: false);
+            if (type != null)
+            {
+                return type;
+            }
+        }
+
+        return null;
     }
 
     private static int PatchMethod(
@@ -118,8 +136,7 @@ internal static class AdminTerrainInfinityHammerCompat
             return;
         }
 
-        Type type = AccessTools.TypeByName("InfinityHammer.Configuration");
-        FieldInfo field = type?.GetField("SavedObjectData", BindingFlags.Public | BindingFlags.Static)!;
+        FieldInfo field = _configurationType?.GetField("SavedObjectData", BindingFlags.Public | BindingFlags.Static)!;
         if (field?.GetValue(null) is not HashSet<string> savedObjectData)
         {
             return;

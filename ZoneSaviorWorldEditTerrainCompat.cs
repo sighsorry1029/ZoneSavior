@@ -38,13 +38,18 @@ internal static class ZoneWorldEditTerrainCompat
             return;
         }
 
+        if (!Chainloader.PluginInfos.ContainsKey(WorldEditCommandsGuid))
+        {
+            return;
+        }
+
         Type? terrainType = GetWorldEditCommandsType("WorldEditCommands.Terrain");
         MethodInfo? resetMethod = terrainType?.GetMethod("ResetTerrain", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
         if (resetMethod == null)
         {
             if (!_missingLogged)
             {
-                _logger?.LogInfo("WorldEditCommands terrain reset compat: WorldEditCommands.Terrain.ResetTerrain not found yet.");
+                _logger?.LogDebug("WorldEditCommands terrain reset compat: WorldEditCommands.Terrain.ResetTerrain not found yet.");
                 _missingLogged = true;
             }
 

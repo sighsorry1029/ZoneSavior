@@ -20,6 +20,7 @@ internal static class ZoneSaviorFeatureBootstrap
     {
         ZoneWorldEditTerrainCompat.Initialize(logger, harmony);
         AdminTerrainTool.InitializeCompat(harmony);
+        VeiledRecipesCompat.Initialize(logger);
     }
 
     public static void Update()

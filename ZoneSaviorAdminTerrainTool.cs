@@ -640,7 +640,18 @@ internal static partial class AdminTerrainTool
 
     private static bool IsAdmin()
     {
-        return ZNet.instance != null && ZNet.instance.LocalPlayerIsAdminOrHost();
+        if (ZNet.instance == null)
+        {
+            return false;
+        }
+
+        return ZNet.instance.LocalPlayerIsAdminOrHost() || IsCheatsEnabled();
+    }
+
+    private static bool IsCheatsEnabled()
+    {
+        return global::Console.instance != null &&
+               ((Terminal)global::Console.instance).IsCheatsEnabled();
     }
 
     private static bool HasStoredSettings(ZDO zdo)

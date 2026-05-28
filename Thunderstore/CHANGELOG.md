@@ -1,5 +1,6 @@
 | `Version` | `Update Notes`                                                                                   |
 |-----------|--------------------------------------------------------------------------------------------------|
+| 1.0.5     | - Fixed admin terrain tools on dedicated servers with ServerDevcommands. <br> - Reduced optional Infinity Hammer and WorldEditCommands compat noise. <br> - Registered terrain tool pieces with VeiledRecipes when available. |
 | 1.0.4     | - Cleaned release packaging and synced package version from the DLL assembly version.             |
 | 1.0.3     | - Added terrain proxies that can be saved in blueprints. <br> - Refactoring and config clean up. |
 | 1.0.2     | - Fixed zs_loadarchive command not working on dedi                                               |
