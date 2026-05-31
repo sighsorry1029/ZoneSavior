@@ -94,7 +94,7 @@ internal static class ZoneBoundaryOverlay
     private static bool ShouldBlockInput()
     {
         return global::Console.IsVisible() ||
-               TextInput.IsVisible() ||
+               ZoneSaviorInputBlockers.IsTextInputVisible() ||
                Menu.IsVisible();
     }
 

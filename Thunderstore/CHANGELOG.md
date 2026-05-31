@@ -1,5 +1,6 @@
 | `Version` | `Update Notes`                                                                                   |
 |-----------|--------------------------------------------------------------------------------------------------|
+| 1.0.6     | - Added a safe text-input visibility fallback so the zone boundary overlay no longer logs repeated errors when another mod patches `TextInput.IsVisible` before its UI is ready. |
 | 1.0.5     | - Fixed admin terrain tools on dedicated servers with ServerDevcommands. <br> - Reduced optional Infinity Hammer and WorldEditCommands compat noise. <br> - Registered terrain tool pieces with VeiledRecipes when available. |
 | 1.0.4     | - Cleaned release packaging and synced package version from the DLL assembly version.             |
 | 1.0.3     | - Added terrain proxies that can be saved in blueprints. <br> - Refactoring and config clean up. |
