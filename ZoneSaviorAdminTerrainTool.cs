@@ -952,6 +952,16 @@ internal static class AdminTerrainToolPieceTablePatch
     }
 }
 
+[HarmonyPatch(typeof(Player), nameof(Player.UpdateKnownRecipesList))]
+internal static class AdminTerrainToolKnownRecipesPatch
+{
+    [HarmonyPriority(Priority.First)]
+    private static void Prefix(Player __instance)
+    {
+        AdminTerrainTool.SanitizeKnownRecipePieceTables(__instance);
+    }
+}
+
 [HarmonyPatch(typeof(Player), "UpdatePlacementGhost")]
 internal static class AdminTerrainToolPlacementGhostPatch
 {

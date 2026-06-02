@@ -8,6 +8,8 @@ namespace ZoneSavior;
 
 internal static partial class AdminTerrainTool
 {
+    private static readonly List<PieceTable> PieceTableScratch = [];
+
     public static void AddToAvailablePieces(PieceTable table, Player player)
     {
         if (!ShouldShowTo(player))
@@ -21,6 +23,7 @@ internal static partial class AdminTerrainTool
             return;
         }
 
+        SanitizePieceTable(table);
         AddPieceToTable(table, _prefab);
         AddPieceToTable(table, _slopePrefab);
         AddPieceToTable(table, _paintPrefab);
@@ -133,6 +136,38 @@ internal static partial class AdminTerrainTool
         if (!pieces.Any(piece => piece && string.Equals(Utils.GetPrefabName(piece.gameObject), prefabName, StringComparison.Ordinal)))
         {
             pieces.Add(pieceComponent);
+        }
+    }
+
+    internal static void SanitizeKnownRecipePieceTables(Player player)
+    {
+        if (!player)
+        {
+            return;
+        }
+
+        SanitizePieceTable(player.m_buildPieces);
+        PieceTableScratch.Clear();
+        player.m_inventory?.GetAllPieceTables(PieceTableScratch);
+        foreach (PieceTable table in PieceTableScratch)
+        {
+            SanitizePieceTable(table);
+        }
+
+        PieceTableScratch.Clear();
+    }
+
+    private static void SanitizePieceTable(PieceTable? table)
+    {
+        if (!table || table.m_pieces == null)
+        {
+            return;
+        }
+
+        table.m_pieces.RemoveAll(piece => !piece);
+        foreach (List<Piece> pieces in table.m_availablePieces)
+        {
+            pieces?.RemoveAll(piece => !piece);
         }
     }
 
@@ -251,6 +286,7 @@ internal static partial class AdminTerrainTool
         GameObject prefab = new(prefabName);
         prefab.name = prefabName;
         prefab.SetActive(false);
+        UnityEngine.Object.DontDestroyOnLoad(prefab);
 
         int pieceLayer = LayerMask.NameToLayer("piece");
         if (pieceLayer >= 0)
