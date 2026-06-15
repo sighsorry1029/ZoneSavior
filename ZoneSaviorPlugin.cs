@@ -13,7 +13,7 @@ namespace ZoneSavior;
 public partial class ZoneSaviorPlugin : BaseUnityPlugin
 {
     internal const string ModName = "ZoneSavior";
-    internal const string ModVersion = "1.0.7";
+    internal const string ModVersion = "1.0.8";
     internal const string Author = "sighsorry";
     internal const string ModGUID = $"{Author}.{ModName}";
     internal const string DataStorageFolder = "ZoneSavior";
@@ -110,29 +110,9 @@ public partial class ZoneSaviorPlugin : BaseUnityPlugin
     {
         EnsureDataDirectories();
 
-        _configWatcher = new FileSystemWatcher(Paths.ConfigPath, ConfigFileName);
-        _configWatcher.Changed += ReadConfigValues;
-        _configWatcher.Created += ReadConfigValues;
-        _configWatcher.Renamed += ReadConfigValues;
-        _configWatcher.IncludeSubdirectories = false;
-        _configWatcher.SynchronizingObject = ThreadingHelper.SynchronizingObject;
-        _configWatcher.EnableRaisingEvents = true;
-
-        _zoneRuleWatcher = new FileSystemWatcher(DataStorageFullPath, ZoneRuleFileName);
-        _zoneRuleWatcher.Changed += ReadZoneRuleValues;
-        _zoneRuleWatcher.Created += ReadZoneRuleValues;
-        _zoneRuleWatcher.Renamed += ReadZoneRuleValues;
-        _zoneRuleWatcher.IncludeSubdirectories = false;
-        _zoneRuleWatcher.SynchronizingObject = ThreadingHelper.SynchronizingObject;
-        _zoneRuleWatcher.EnableRaisingEvents = true;
-
-        _activityWatcher = new FileSystemWatcher(DataStorageFullPath, ActivityFileName);
-        _activityWatcher.Changed += ReadActivityValues;
-        _activityWatcher.Created += ReadActivityValues;
-        _activityWatcher.Renamed += ReadActivityValues;
-        _activityWatcher.IncludeSubdirectories = false;
-        _activityWatcher.SynchronizingObject = ThreadingHelper.SynchronizingObject;
-        _activityWatcher.EnableRaisingEvents = true;
+        _configWatcher = WatchFile(Paths.ConfigPath, ConfigFileName, ReadConfigValues);
+        _zoneRuleWatcher = WatchFile(DataStorageFullPath, ZoneRuleFileName, ReadZoneRuleValues);
+        _activityWatcher = WatchFile(DataStorageFullPath, ActivityFileName, ReadActivityValues);
     }
 
     private static void EnsureDataDirectories()
@@ -141,14 +121,24 @@ public partial class ZoneSaviorPlugin : BaseUnityPlugin
         Directory.CreateDirectory(ZoneBundleStorageFullPath);
     }
 
+    private static FileSystemWatcher WatchFile(string directory, string filter, FileSystemEventHandler handler)
+    {
+        FileSystemWatcher watcher = new(directory, filter)
+        {
+            IncludeSubdirectories = false,
+            SynchronizingObject = ThreadingHelper.SynchronizingObject,
+            EnableRaisingEvents = true
+        };
+
+        watcher.Changed += handler;
+        watcher.Created += handler;
+        watcher.Renamed += (_, e) => handler(_, e);
+        return watcher;
+    }
+
     private void ReadConfigValues(object sender, FileSystemEventArgs e)
     {
-        if (!CanReload(ref _lastConfigReloadTime))
-        {
-            return;
-        }
-
-        lock (_reloadLock)
+        ReloadWatchedFile(ref _lastConfigReloadTime, "configuration", () =>
         {
             if (!File.Exists(ConfigFileFullPath))
             {
@@ -156,65 +146,34 @@ public partial class ZoneSaviorPlugin : BaseUnityPlugin
                 return;
             }
 
-            try
-            {
-                ZoneSaviorLogger.LogDebug("Reloading configuration...");
-                ReloadConfigFromDisk();
-                ZoneSaviorLogger.LogInfo("Configuration reload complete.");
-            }
-            catch (Exception ex)
-            {
-                ZoneSaviorLogger.LogError($"Error reloading configuration: {ex}");
-            }
-        }
+            ZoneSaviorLogger.LogDebug("Reloading configuration...");
+            ReloadConfigFromDisk();
+            ZoneSaviorLogger.LogInfo("Configuration reload complete.");
+        });
     }
 
     private void ReadZoneRuleValues(object sender, FileSystemEventArgs e)
     {
-        if (!CanReload(ref _lastZoneRuleReloadTime))
-        {
-            return;
-        }
-
-        lock (_reloadLock)
-        {
-            try
-            {
-                ZoneSaviorFeatureBootstrap.ReloadZoneRulesFromDisk();
-            }
-            catch (Exception ex)
-            {
-                ZoneSaviorLogger.LogError($"Error reloading zone rule YAML: {ex}");
-            }
-        }
+        ReloadWatchedFile(
+            ref _lastZoneRuleReloadTime,
+            "zone rule YAML",
+            ZoneSaviorFeatureBootstrap.ReloadZoneRulesFromDisk);
     }
 
     private void ReadActivityValues(object sender, FileSystemEventArgs e)
     {
-        if (!CanReload(ref _lastActivityReloadTime))
+        ReloadWatchedFile(ref _lastActivityReloadTime, "activity YAML", () =>
         {
-            return;
-        }
-
-        lock (_reloadLock)
-        {
-            try
+            bool reloaded = ZoneSaviorFeatureBootstrap.TryReloadActivityFromDisk(out string message);
+            if (reloaded)
             {
-                bool reloaded = ZoneSaviorFeatureBootstrap.TryReloadActivityFromDisk(out string message);
-                if (reloaded)
-                {
-                    ZoneSaviorLogger.LogInfo(message);
-                }
-                else
-                {
-                    ZoneSaviorLogger.LogDebug(message);
-                }
+                ZoneSaviorLogger.LogInfo(message);
             }
-            catch (Exception ex)
+            else
             {
-                ZoneSaviorLogger.LogError($"Error reloading activity YAML: {ex}");
+                ZoneSaviorLogger.LogDebug(message);
             }
-        }
+        });
     }
 
     private static bool CanReload(ref DateTime lastReloadTime)
@@ -227,6 +186,26 @@ public partial class ZoneSaviorPlugin : BaseUnityPlugin
 
         lastReloadTime = now;
         return true;
+    }
+
+    private void ReloadWatchedFile(ref DateTime lastReloadTime, string label, Action reload)
+    {
+        if (!CanReload(ref lastReloadTime))
+        {
+            return;
+        }
+
+        lock (_reloadLock)
+        {
+            try
+            {
+                reload();
+            }
+            catch (Exception ex)
+            {
+                ZoneSaviorLogger.LogError($"Error reloading {label}: {ex}");
+            }
+        }
     }
 
     private void SaveWithRespectToConfigSet(bool reload = false)

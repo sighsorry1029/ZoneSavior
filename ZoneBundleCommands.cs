@@ -1683,27 +1683,28 @@ internal static partial class ZoneBundleCommands
         int monsterCount = 0;
         foreach (ZDO zdo in objects)
         {
-            if (TryCreateBundleEntry(
-                    zdo,
-                    zone,
-                    zoneCenter,
-                    sourceAnchor,
-                    useRelativePlacement,
-                    creatorNames,
-                    ref staticCount,
-                    ref monsterCount,
-                    out ZoneBundleEntry entry))
-            {
-                zoneEntries.Add(entry);
-            }
+            TryAddBundleEntry(
+                zdo,
+                zone,
+                zoneCenter,
+                sourceAnchor,
+                useRelativePlacement,
+                creatorNames,
+                ref staticCount,
+                ref monsterCount,
+                zoneEntries);
         }
-
-        List<ZoneBundleTerrainContact> terrainContacts = ZoneBundleTerrain.CaptureSupportContacts(zone, sourceAnchor.BaseWorldY, zoneEntries, out bool contactsCaptured);
-        terrainState = GetTerrainCaptureState(contactsCaptured, terrainContacts.Count);
 
         entries = zoneEntries.Count;
         monsters = monsterCount;
-        return CreateCapturedBundle(zone, tag, sourceAnchor, useRelativePlacement, zoneEntries, creatorNames, terrainContacts, contactsCaptured, terrainState);
+        return CaptureTerrainAndCreateBundle(
+            zone,
+            tag,
+            sourceAnchor,
+            useRelativePlacement,
+            zoneEntries,
+            creatorNames,
+            out terrainState);
     }
 
     private static IEnumerator CaptureBundleAsync(Vector2i zone, string tag, ZoneBundleTerrain.TerrainSourceAnchor sourceAnchor, Action<CaptureBundleResult> onComplete)
@@ -1730,19 +1731,16 @@ internal static partial class ZoneBundleCommands
         {
             try
             {
-                if (TryCreateBundleEntry(
-                        zdo,
-                        zone,
-                        zoneCenter,
-                        sourceAnchor,
-                        useRelativePlacement,
-                        creatorNames,
-                        ref staticCount,
-                        ref monsterCount,
-                        out ZoneBundleEntry entry))
-                {
-                    zoneEntries.Add(entry);
-                }
+                TryAddBundleEntry(
+                    zdo,
+                    zone,
+                    zoneCenter,
+                    sourceAnchor,
+                    useRelativePlacement,
+                    creatorNames,
+                    ref staticCount,
+                    ref monsterCount,
+                    zoneEntries);
             }
             catch (Exception ex)
             {
@@ -1762,18 +1760,14 @@ internal static partial class ZoneBundleCommands
 
         try
         {
-            List<ZoneBundleTerrainContact> terrainContacts = ZoneBundleTerrain.CaptureSupportContacts(zone, sourceAnchor.BaseWorldY, zoneEntries, out bool contactsCaptured);
-            ZoneBundleTerrainCaptureState terrainState = GetTerrainCaptureState(contactsCaptured, terrainContacts.Count);
-            ZoneBundleFile bundle = CreateCapturedBundle(
+            ZoneBundleFile bundle = CaptureTerrainAndCreateBundle(
                 zone,
                 tag,
                 sourceAnchor,
                 useRelativePlacement,
                 zoneEntries,
                 creatorNames,
-                terrainContacts,
-                contactsCaptured,
-                terrainState);
+                out ZoneBundleTerrainCaptureState terrainState);
 
             onComplete(CaptureBundleResult.Completed(bundle, zoneEntries.Count, monsterCount, terrainState));
         }
@@ -1781,6 +1775,35 @@ internal static partial class ZoneBundleCommands
         {
             onComplete(CaptureBundleResult.Failed(ex.Message));
         }
+    }
+
+    private static bool TryAddBundleEntry(
+        ZDO zdo,
+        Vector2i zone,
+        Vector3 zoneCenter,
+        ZoneBundleTerrain.TerrainSourceAnchor sourceAnchor,
+        bool useRelativePlacement,
+        Dictionary<long, string> creatorNames,
+        ref int staticCount,
+        ref int monsterCount,
+        List<ZoneBundleEntry> zoneEntries)
+    {
+        if (!TryCreateBundleEntry(
+                zdo,
+                zone,
+                zoneCenter,
+                sourceAnchor,
+                useRelativePlacement,
+                creatorNames,
+                ref staticCount,
+                ref monsterCount,
+                out ZoneBundleEntry entry))
+        {
+            return false;
+        }
+
+        zoneEntries.Add(entry);
+        return true;
     }
 
     private static bool TryCreateBundleEntry(
@@ -1905,6 +1928,34 @@ internal static partial class ZoneBundleCommands
         };
     }
 
+    private static ZoneBundleFile CaptureTerrainAndCreateBundle(
+        Vector2i zone,
+        string tag,
+        ZoneBundleTerrain.TerrainSourceAnchor sourceAnchor,
+        bool useRelativePlacement,
+        List<ZoneBundleEntry> zoneEntries,
+        Dictionary<long, string> creatorNames,
+        out ZoneBundleTerrainCaptureState terrainState)
+    {
+        List<ZoneBundleTerrainContact> terrainContacts = ZoneBundleTerrain.CaptureSupportContacts(
+            zone,
+            sourceAnchor.BaseWorldY,
+            zoneEntries,
+            out bool contactsCaptured);
+
+        terrainState = GetTerrainCaptureState(contactsCaptured, terrainContacts.Count);
+        return CreateCapturedBundle(
+            zone,
+            tag,
+            sourceAnchor,
+            useRelativePlacement,
+            zoneEntries,
+            creatorNames,
+            terrainContacts,
+            contactsCaptured,
+            terrainState);
+    }
+
     private static ZoneBundleTerrainCaptureState GetTerrainCaptureState(bool contactsCaptured, int contactCount)
     {
         if (!contactsCaptured)
@@ -1958,13 +2009,7 @@ internal static partial class ZoneBundleCommands
         Vector3 zoneCenter = ZoneSystem.GetZonePos(targetZone);
         foreach (ZoneBundleEntry entry in bundle.Entries)
         {
-            if (!TryCreateLoadedZdo(entry, zoneCenter, bundle, terrainContext, yOffset, out ZDO? zdo) || zdo == null)
-            {
-                continue;
-            }
-
-            ZNetScene.instance.CreateObject(zdo);
-            created++;
+            created += TryCreateAndSpawnLoadedZdo(entry, zoneCenter, bundle, terrainContext, yOffset) ? 1 : 0;
         }
 
         return new ZoneLoadStats(removed, created, terrainApplied);
@@ -1999,11 +2044,7 @@ internal static partial class ZoneBundleCommands
         Vector3 zoneCenter = ZoneSystem.GetZonePos(targetZone);
         foreach (ZoneBundleEntry entry in bundle.Entries)
         {
-            if (TryCreateLoadedZdo(entry, zoneCenter, bundle, terrainContext, yOffset, out ZDO? zdo) && zdo != null)
-            {
-                ZNetScene.instance.CreateObject(zdo);
-                created++;
-            }
+            created += TryCreateAndSpawnLoadedZdo(entry, zoneCenter, bundle, terrainContext, yOffset) ? 1 : 0;
 
             processedSinceYield++;
             if (processedSinceYield >= CaptureBatchSize)
@@ -2014,6 +2055,22 @@ internal static partial class ZoneBundleCommands
         }
 
         onComplete(new ZoneLoadStats(removed, created, terrainApplied));
+    }
+
+    private static bool TryCreateAndSpawnLoadedZdo(
+        ZoneBundleEntry entry,
+        Vector3 zoneCenter,
+        ZoneBundleFile bundle,
+        TerrainPlacementContext? terrainContext,
+        float yOffset)
+    {
+        if (!TryCreateLoadedZdo(entry, zoneCenter, bundle, terrainContext, yOffset, out ZDO? zdo) || zdo == null)
+        {
+            return false;
+        }
+
+        ZNetScene.instance.CreateObject(zdo);
+        return true;
     }
 
     private static bool TryCreateLoadedZdo(

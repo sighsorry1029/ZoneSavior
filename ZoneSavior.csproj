@@ -137,6 +137,8 @@
         <Compile Include="BuildCounterHud.cs"/>
         <Compile Include="ZoneSaviorTimestamp.cs"/>
         <Compile Include="VeiledRecipesCompat.cs"/>
+        <Compile Include="ZoneSaviorExpandWorldDataCompat.cs"/>
+        <Compile Include="ZoneSaviorTerrainMistileCompat.cs"/>
         <Compile Include="AdminTerrainInfinityHammerCompat.cs"/>
         <Compile Include="AdminTerrainToolIcons.cs"/>
         <Compile Include="AdminTerrainToolPlacement.cs"/>
