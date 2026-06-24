@@ -12,8 +12,14 @@ internal static partial class AdminTerrainTool
 
     public static void AddToAvailablePieces(PieceTable table, Player player)
     {
+        if (!table)
+        {
+            return;
+        }
+
         if (!ShouldShowTo(player))
         {
+            RemoveFromPieceTable(table);
             return;
         }
 
@@ -146,15 +152,49 @@ internal static partial class AdminTerrainTool
             return;
         }
 
+        bool removeAdminTools = !ShouldShowTo(player);
         SanitizePieceTable(player.m_buildPieces);
+        if (removeAdminTools)
+        {
+            RemoveFromPieceTable(player.m_buildPieces);
+        }
+
         PieceTableScratch.Clear();
         player.m_inventory?.GetAllPieceTables(PieceTableScratch);
         foreach (PieceTable table in PieceTableScratch)
         {
             SanitizePieceTable(table);
+            if (removeAdminTools)
+            {
+                RemoveFromPieceTable(table);
+            }
         }
 
         PieceTableScratch.Clear();
+    }
+
+    private static void RemoveFromPieceTable(PieceTable? table)
+    {
+        if (!table || table.m_pieces == null)
+        {
+            return;
+        }
+
+        table.m_pieces.RemoveAll(IsProxyPrefab);
+        if (table.m_availablePieces == null)
+        {
+            return;
+        }
+
+        foreach (List<Piece> pieces in table.m_availablePieces)
+        {
+            pieces?.RemoveAll(IsProxyPiece);
+        }
+    }
+
+    private static bool IsProxyPrefab(GameObject prefab)
+    {
+        return prefab && IsProxyPrefabName(Utils.GetPrefabName(prefab));
     }
 
     private static void SanitizePieceTable(PieceTable? table)
