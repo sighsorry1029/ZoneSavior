@@ -239,7 +239,7 @@ internal static partial class ZoneBundleCommands
         {
             if (request.RestoreOriginal)
             {
-                yield return RestoreTagToOriginalZonesAsync(request.Tag, value => result = value);
+                yield return RestoreTagToOriginalZonesAsync(request, value => result = value, terrainAssistPeer);
             }
             else if (request.LoadSourceZone)
             {
@@ -941,7 +941,8 @@ internal static partial class ZoneBundleCommands
         bool exactSource,
         float yOffset,
         Action<TerrainPlacementContext?, string> onComplete,
-        bool validateTargetTerrain = true)
+        bool validateTargetTerrain = true,
+        bool allowEmptySupportRelativeHeights = false)
     {
         List<LoadWorkItem> items = work.ToList();
         TerrainPlacementContext? context = null;
@@ -979,7 +980,7 @@ internal static partial class ZoneBundleCommands
         try
         {
             ApplyYOffset(context, yOffset);
-            ValidateTerrainPlacementContext(items, context, validateTargetTerrain);
+            ValidateTerrainPlacementContext(items, context, validateTargetTerrain, allowEmptySupportRelativeHeights);
             onComplete(context, "");
         }
         catch (Exception ex)
@@ -988,7 +989,11 @@ internal static partial class ZoneBundleCommands
         }
     }
 
-    private static void ValidateTerrainPlacementContext(IReadOnlyCollection<LoadWorkItem> work, TerrainPlacementContext? terrainContext, bool validateTargetTerrain = true)
+    private static void ValidateTerrainPlacementContext(
+        IReadOnlyCollection<LoadWorkItem> work,
+        TerrainPlacementContext? terrainContext,
+        bool validateTargetTerrain = true,
+        bool allowEmptySupportRelativeHeights = false)
     {
         if (!work.Any(item => RequiresTerrainApply(item.Bundle)))
         {
@@ -1002,7 +1007,7 @@ internal static partial class ZoneBundleCommands
 
         if (!validateTargetTerrain)
         {
-            if (terrainContext.SupportRelativeHeights.Count == 0)
+            if (!allowEmptySupportRelativeHeights && terrainContext.SupportRelativeHeights.Count == 0)
             {
                 throw new InvalidOperationException("Zone bundle terrain support placement produced no support points. Load aborted before overwriting target zones.");
             }
@@ -1130,7 +1135,7 @@ internal static partial class ZoneBundleCommands
         Action<TerrainPlacementContext?, TerrainPreparationResult, string> onComplete)
     {
         string readyError = "";
-        bool allowClientTerrainApply = terrainAssistPeer != 0L;
+        bool allowClientTerrainApply = true;
         yield return ValidateLoadReadyAsync(work, value => readyError = value, allowClientTerrainApply);
         if (!string.IsNullOrWhiteSpace(readyError))
         {
@@ -1145,7 +1150,7 @@ internal static partial class ZoneBundleCommands
         {
             terrainContext = context;
             contextError = error;
-        }, validateTargetTerrain: !allowClientTerrainApply);
+        }, validateTargetTerrain: !allowClientTerrainApply, allowEmptySupportRelativeHeights: allowClientTerrainApply && exactSource);
         if (!string.IsNullOrWhiteSpace(contextError))
         {
             _logger.LogError($"{failurePrefix}: {contextError}");
@@ -1232,7 +1237,15 @@ internal static partial class ZoneBundleCommands
             string terrainApplyFailure = "";
             foreach (long witnessPeer in GetTerrainWitnessCandidates(zone, terrainAssistPeer))
             {
-                yield return RequestClientTerrainApplyAsync(witnessPeer, request, [zone], terrainContext, value => response = value);
+                List<LoadWorkItem> targetItems = GetTerrainApplyItemsForZone(work, zone);
+                bool includeTerrainSources = terrainContext.SupportRelativeHeights.Count == 0;
+                yield return RequestClientTerrainApplyAsync(
+                    witnessPeer,
+                    request,
+                    targetItems,
+                    terrainContext,
+                    includeTerrainSources,
+                    value => response = value);
                 if (response is { Success: true })
                 {
                     break;
@@ -1258,12 +1271,14 @@ internal static partial class ZoneBundleCommands
     private static IEnumerator RequestClientTerrainApplyAsync(
         long terrainAssistPeer,
         ZoneBundleCommandRequest commandRequest,
-        IReadOnlyCollection<Vector2i> targetZones,
+        IReadOnlyCollection<LoadWorkItem> targetItems,
         TerrainPlacementContext terrainContext,
+        bool includeTerrainSources,
         Action<ZoneBundleClientTerrainApplyResponse?> onComplete)
     {
         string requestId = System.Guid.NewGuid().ToString("N");
-        List<ZoneBundleZone> targetZoneModels = targetZones
+        List<ZoneBundleZone> targetZoneModels = targetItems
+            .Select(item => item.TargetZone)
             .Distinct()
             .Select(ToModel)
             .ToList();
@@ -1274,7 +1289,10 @@ internal static partial class ZoneBundleCommands
             Operation = commandRequest.Operation,
             Tag = commandRequest.Tag,
             Context = terrainContext,
-            TargetZones = targetZoneModels
+            TargetZones = targetZoneModels,
+            Targets = includeTerrainSources
+                ? targetItems.Select(CreateClientTerrainApplyTarget).ToList()
+                : []
         };
 
         ClientTerrainApplyResponses.Remove(requestId);
@@ -1396,8 +1414,7 @@ internal static partial class ZoneBundleCommands
     {
         ZoneBundleClientTerrainApplyResponse response = new()
         {
-            RequestId = request.RequestId,
-            TargetZones = request.TargetZones.Count
+            RequestId = request.RequestId
         };
 
         if (request.Context == null)
@@ -1408,32 +1425,36 @@ internal static partial class ZoneBundleCommands
             yield break;
         }
 
-        if (request.Context.SupportRelativeHeights == null || request.Context.SupportRelativeHeights.Count == 0)
+        List<ZoneBundleClientTerrainApplyTarget> targets = ResolveClientTerrainApplyTargets(request);
+        bool hasContextSupport = request.Context.SupportRelativeHeights is { Count: > 0 };
+        bool hasTargetSources = targets.Any(HasTerrainApplySource);
+        if (!hasContextSupport && !hasTargetSources)
         {
             response.Success = false;
-            response.Message = "Client terrain apply failed: terrain context has no support points.";
+            response.Message = "Client terrain apply failed: terrain context has no support points or bundle terrain sources.";
             SendClientTerrainApplyResponse(sender, response);
             yield break;
         }
 
-        foreach (ZoneBundleZone model in request.TargetZones)
+        response.TargetZones = targets.Count;
+        foreach (ZoneBundleClientTerrainApplyTarget target in targets)
         {
-            Vector2i zone = ToVector2i(model);
+            Vector2i zone = ToVector2i(target.Zone);
             try
             {
                 if (!ZoneBundleTerrain.CanApply(zone))
                 {
                     response.Success = false;
-                    response.Message = $"Client target zone ({zone.x},{zone.y}) is not loaded for terrain overwrite. Move the admin client into the target area and try again.";
+                    response.Message = $"Client target zone ({zone.x},{zone.y}) is not loaded for terrain overwrite. Move a ZoneSavior client into the target area and try again.";
                     SendClientTerrainApplyResponse(sender, response);
                     yield break;
                 }
 
                 if (!ZoneBundleTerrain.HasApplicableSupportFill(
                         zone,
-                        Enumerable.Empty<ZoneBundleEntry>(),
-                        Enumerable.Empty<ZoneBundleTerrainContact>(),
-                        contactsCaptured: false,
+                        target.Entries,
+                        target.Contacts,
+                        target.ContactsCaptured,
                         request.Context))
                 {
                     response.Success = false;
@@ -1455,9 +1476,9 @@ internal static partial class ZoneBundleCommands
             {
                 changed = ZoneBundleTerrain.ApplySupportFill(
                     zone,
-                    Enumerable.Empty<ZoneBundleEntry>(),
-                    Enumerable.Empty<ZoneBundleTerrainContact>(),
-                    contactsCaptured: false,
+                    target.Entries,
+                    target.Contacts,
+                    target.ContactsCaptured,
                     request.Context);
             }
             catch (Exception ex)
@@ -1477,7 +1498,7 @@ internal static partial class ZoneBundleCommands
         }
 
         response.Success = true;
-        response.Message = $"Client applied terrain support for {request.TargetZones.Count} target zone(s).";
+        response.Message = $"Client applied terrain support for {targets.Count} target zone(s).";
         SendClientTerrainApplyResponse(sender, response);
     }
 
@@ -1493,6 +1514,13 @@ internal static partial class ZoneBundleCommands
         return RequiredTerrainTargetZones(work).Count;
     }
 
+    private static List<LoadWorkItem> GetTerrainApplyItemsForZone(IEnumerable<LoadWorkItem> work, Vector2i zone)
+    {
+        return work
+            .Where(item => item.TargetZone == zone && RequiresTerrainApply(item.Bundle))
+            .ToList();
+    }
+
     private static List<Vector2i> RequiredTerrainTargetZones(IEnumerable<LoadWorkItem> work)
     {
         return work
@@ -1500,6 +1528,37 @@ internal static partial class ZoneBundleCommands
             .Select(item => item.TargetZone)
             .Distinct()
             .ToList();
+    }
+
+    private static ZoneBundleClientTerrainApplyTarget CreateClientTerrainApplyTarget(LoadWorkItem item)
+    {
+        return new ZoneBundleClientTerrainApplyTarget
+        {
+            Zone = ToModel(item.TargetZone),
+            Entries = item.Bundle.Entries,
+            ContactsCaptured = item.Bundle.TerrainContactsCaptured,
+            Contacts = item.Bundle.TerrainContacts
+        };
+    }
+
+    private static List<ZoneBundleClientTerrainApplyTarget> ResolveClientTerrainApplyTargets(ZoneBundleClientTerrainApplyRequest request)
+    {
+        if (request.Targets.Count > 0)
+        {
+            return request.Targets;
+        }
+
+        return request.TargetZones
+            .Select(zone => new ZoneBundleClientTerrainApplyTarget
+            {
+                Zone = zone
+            })
+            .ToList();
+    }
+
+    private static bool HasTerrainApplySource(ZoneBundleClientTerrainApplyTarget target)
+    {
+        return target.ContactsCaptured && target.Contacts.Count > 0 || target.Entries.Count > 0;
     }
 
     private static List<long> GetTerrainWitnessCandidates(Vector2i zone, long preferredPeer)

@@ -140,6 +140,15 @@ internal sealed class ZoneBundleClientTerrainApplyRequest
     public string Tag { get; set; } = "";
     public TerrainPlacementContext? Context { get; set; }
     public List<ZoneBundleZone> TargetZones { get; set; } = [];
+    public List<ZoneBundleClientTerrainApplyTarget> Targets { get; set; } = [];
+}
+
+internal sealed class ZoneBundleClientTerrainApplyTarget
+{
+    public ZoneBundleZone Zone { get; set; } = new();
+    public List<ZoneBundleEntry> Entries { get; set; } = [];
+    public bool ContactsCaptured { get; set; }
+    public List<ZoneBundleTerrainContact> Contacts { get; set; } = [];
 }
 
 internal sealed class ZoneBundleClientTerrainApplyResponse

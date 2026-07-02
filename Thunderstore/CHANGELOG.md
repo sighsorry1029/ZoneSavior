@@ -1,5 +1,6 @@
 | `Version` | `Update Notes`                                                                                   |
 |-----------|--------------------------------------------------------------------------------------------------|
+| 1.0.10    | - Allowed RCON and dedicated server zone loads/restores to use nearby ZoneSavior clients as terrain witnesses when the server has not loaded the target terrain. |
 | 1.0.9     | - Removed admin terrain tool pieces from build tables when the player is not in the allowed admin/debug state. |
 | 1.0.8     | - Added safer Expand World Data and TerrainMistile compatibility for ZoneSavior terrain proxies. <br> - Cleaned watcher reload handling, terrain reset placement, and zone bundle capture/load internals. |
 | 1.0.7     | - Kept admin terrain proxy prefabs alive across scene/world reloads. <br> - Sanitized dead piece table references before recipe refreshes to prevent Jotunn/Unity null-reference errors. |

@@ -27,8 +27,9 @@ internal static partial class ZoneBundleCommands
             $"(removed: {totals.Removed}, created: {totals.Created}, terrain: {totals.TerrainApplied}/{work.Count}).");
     }
 
-    internal static IEnumerator RestoreTagToOriginalZonesAsync(string tag, Action<ZoneBundleCommandResult> onComplete)
+    internal static IEnumerator RestoreTagToOriginalZonesAsync(ZoneBundleCommandRequest request, Action<ZoneBundleCommandResult> onComplete, long terrainAssistPeer)
     {
+        string tag = request.Tag;
         ZoneBundleManifest manifest;
         try
         {
@@ -57,10 +58,12 @@ internal static partial class ZoneBundleCommands
         }
 
         ZoneLoadTotals totals = default;
+        TerrainPreparationResult terrainPreparation = default;
         string restoreError = "";
-        yield return PrepareAndApplyLocalLoadWorkAsync("Zone bundle async archive restore failed", work, exactSource: true, 0f, (loadTotals, error) =>
+        yield return PrepareAndApplyLoadWorkAsync("Zone bundle async archive restore failed", request, work, exactSource: true, 0f, terrainAssistPeer, (loadTotals, preparation, error) =>
         {
             totals = loadTotals;
+            terrainPreparation = preparation;
             restoreError = error;
         });
         if (!string.IsNullOrWhiteSpace(restoreError))
@@ -71,7 +74,7 @@ internal static partial class ZoneBundleCommands
 
         onComplete(ZoneBundleCommandResult.Ok(
             $"Restored {work.Count} archived zone bundle(s) for tag '{tag}' " +
-            $"(removed: {totals.Removed}, created: {totals.Created}, terrain: {totals.TerrainApplied}/{work.Count})."));
+            $"(removed: {totals.Removed}, created: {totals.Created}, terrain: {totals.TerrainApplied}/{work.Count}{terrainPreparation.Describe()})."));
     }
 
     internal static string MakeUniqueAutoArchiveTag(string preferredTag)
