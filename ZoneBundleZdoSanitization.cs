@@ -1,11 +1,18 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
+using HarmonyLib;
 using UnityEngine;
 using DataEntry = ZoneSavior.ZoneBundleZdoData;
+using DataHelper = ZoneSavior.ZoneBundleZdoHelper;
 
 namespace ZoneSavior;
 
 internal static partial class ZoneBundleCommands
 {
+    private static int _tamedAnimalOverwriteDestroyDepth;
+    private static bool _loggedTamedAnimalDestroyException;
+
     private static bool TryClassify(ZDO zdo, out SaveEntryKind kind, out GameObject prefab)
     {
         prefab = ZNetScene.instance.GetPrefab(zdo.GetPrefab());
@@ -58,6 +65,76 @@ internal static partial class ZoneBundleCommands
     private static bool IsTamedMonster(ZDO zdo, GameObject prefab)
     {
         return prefab.GetComponent<Tameable>() != null && zdo.GetBool(ZDOVars.s_tamed, false);
+    }
+
+    private static void DestroyOverwritableZdo(GameObject prefab, ZDO zdo)
+    {
+        if (!IsTamedMonster(zdo, prefab))
+        {
+            DataHelper.Destroy(zdo);
+            return;
+        }
+
+        _tamedAnimalOverwriteDestroyDepth++;
+        try
+        {
+            DataHelper.Destroy(zdo);
+        }
+        finally
+        {
+            _tamedAnimalOverwriteDestroyDepth--;
+            RemoveStaleCharacterReferences();
+        }
+    }
+
+    internal static Exception? FinalizeTamedAnimalCharacterDestroy(Character character, Exception? exception)
+    {
+        if (exception == null || _tamedAnimalOverwriteDestroyDepth <= 0)
+        {
+            return exception;
+        }
+
+        RemoveCharacterReference(character);
+        if (!_loggedTamedAnimalDestroyException)
+        {
+            _loggedTamedAnimalDestroyException = true;
+            _logger.LogWarning($"Suppressed Character.OnDestroy error while replacing a tamed animal: {exception.GetType().Name}: {exception.Message}");
+        }
+
+        return null;
+    }
+
+    private static void RemoveStaleCharacterReferences()
+    {
+        List<Character> characters = Character.GetAllCharacters();
+        for (int i = characters.Count - 1; i >= 0; i--)
+        {
+            if (!characters[i])
+            {
+                characters.RemoveAt(i);
+            }
+        }
+    }
+
+    private static void RemoveCharacterReference(Character character)
+    {
+        if (ReferenceEquals(character, null))
+        {
+            return;
+        }
+
+        Character.GetAllCharacters().Remove(character);
+        try
+        {
+            if (EnemyHud.instance)
+            {
+                EnemyHud.instance.RemoveCharacterHud(character);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug($"Failed to remove stale tamed animal HUD reference: {ex.Message}");
+        }
     }
 
     private static void SanitizeForSave(SaveEntryKind kind, DataEntry data, string sanitize)
@@ -115,34 +192,19 @@ internal static partial class ZoneBundleCommands
 
     private static void RemoveMonsterVolatileKeys(DataEntry data)
     {
-        RemoveCommonEntityVolatileKeys(data);
-        RemoveKey(data, ZDOVars.s_alert);
-        RemoveKey(data, ZDOVars.s_aggravated);
-        RemoveKey(data, ZDOVars.s_follow);
-        RemoveKey(data, ZDOVars.s_haveTargetHash);
-        RemoveKey(data, ZDOVars.s_huntPlayer);
-        RemoveKey(data, ZDOVars.s_patrol);
-        RemoveKey(data, ZDOVars.s_patrolPoint);
-        RemoveKey(data, ZDOVars.s_spawnPoint);
-        RemoveKey(data, ZDOVars.s_targets);
-        RemoveKey(data, ZDOVars.s_shownAlertMessage);
-        RemoveKey(data, ZDOVars.s_sleeping);
-        RemoveKey(data, ZDOVars.s_worldTimeHash);
-        RemoveKey(data, ZDOVars.s_spawnTime);
-        RemoveKey(data, ZDOVars.s_spawn_time__DontUse);
-        RemoveKey(data, ZDOVars.s_SpawnTime__DontUse);
-        RemoveKey(data, ZDOVars.s_tameLastFeeding);
-        RemoveKey(data, ZDOVars.s_tameTimeLeft);
-        RemoveKey(data, ZDOVars.s_lovePoints);
-        RemoveKey(data, ZDOVars.s_pregnant);
-        RemoveKey(data, ZDOVars.s_seAttrib);
-        RemoveKey(data, ZDOVars.s_lastAttack);
-        RemoveKey(data, ZDOVars.s_noise);
-        RemoveKey(data, ZDOVars.s_tiltrot);
-        RemoveKey(data, ZDOVars.s_toRemoveTarget.Key);
-        RemoveKey(data, ZDOVars.s_toRemoveTarget.Value);
-        RemoveKey(data, ZDOVars.s_toRemoveSpawnID.Key);
-        RemoveKey(data, ZDOVars.s_toRemoveSpawnID.Value);
+        KeepOnly(data.Strings, ZDOVars.s_tamedName, ZDOVars.s_tamedNameAuthor);
+        KeepOnly(data.Ints, ZDOVars.s_level, ZDOVars.s_tamed, ZDOVars.s_haveSaddleHash);
+        KeepOnly(data.Bools, ZDOVars.s_tamed, ZDOVars.s_haveSaddleHash);
+
+        data.Floats.Clear();
+        data.Hashes.Clear();
+        data.Longs.Clear();
+        data.Vecs.Clear();
+        data.Quats.Clear();
+        data.ByteArrays.Clear();
+
+        data.Ints[ZDOVars.s_tamed] = 1;
+        data.Bools[ZDOVars.s_tamed] = true;
     }
 
     private static void RemoveCommonEntityVolatileKeys(DataEntry data)
@@ -181,6 +243,18 @@ internal static partial class ZoneBundleCommands
         data.ByteArrays?.Remove(hash);
     }
 
+    private static void KeepOnly<T>(Dictionary<int, T> values, params int[] keys)
+    {
+        HashSet<int> keep = [..keys];
+        foreach (int key in values.Keys.ToList())
+        {
+            if (!keep.Contains(key))
+            {
+                values.Remove(key);
+            }
+        }
+    }
+
     private static Vector3 ReadScale(ZDO zdo, GameObject prefab)
     {
         return zdo.GetVec3(ZDOVars.s_scaleHash, prefab.transform.localScale);
@@ -190,5 +264,14 @@ internal static partial class ZoneBundleCommands
     {
         Static,
         Monster
+    }
+}
+
+[HarmonyPatch(typeof(Character), nameof(Character.OnDestroy))]
+internal static class ZoneBundleTamedAnimalCharacterDestroyPatch
+{
+    private static Exception? Finalizer(Character __instance, Exception? __exception)
+    {
+        return ZoneBundleCommands.FinalizeTamedAnimalCharacterDestroy(__instance, __exception);
     }
 }

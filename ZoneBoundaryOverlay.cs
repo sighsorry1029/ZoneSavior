@@ -1,7 +1,9 @@
+using System;
 using System.Linq;
 using BepInEx.Configuration;
 using TMPro;
 using UnityEngine;
+using Object = UnityEngine.Object;
 
 namespace ZoneSavior;
 
@@ -199,7 +201,7 @@ internal static class ZoneBoundaryOverlay
         rect.anchorMax = new Vector2(0.5f, 1f);
         rect.pivot = new Vector2(0.5f, 1f);
         rect.anchoredPosition = new Vector2(0f, -96f);
-        rect.sizeDelta = new Vector2(260f, 42f);
+        rect.sizeDelta = new Vector2(360f, 64f);
 
         _hudGroup = _hudText.GetComponent<CanvasGroup>();
         if (_hudGroup == null)
@@ -229,7 +231,23 @@ internal static class ZoneBoundaryOverlay
             return;
         }
 
-        _hudText.text = $"Zone {zone.x}, {zone.y}";
+        string text = $"Zone {zone.x}, {zone.y}";
+        if (ZoneBundleSupportGrace.TryGetRemaining(zone, out TimeSpan remaining))
+        {
+            text += $"\nSupport grace {FormatRemaining(remaining)}";
+        }
+
+        _hudText.text = text;
+    }
+
+    private static string FormatRemaining(TimeSpan remaining)
+    {
+        if (remaining.TotalHours >= 1d)
+        {
+            return $"{(int)remaining.TotalHours:0}:{remaining.Minutes:00}:{remaining.Seconds:00}";
+        }
+
+        return $"{remaining.Minutes:00}:{remaining.Seconds:00}";
     }
 
     private static void DrawBoundary(Vector2i zone)

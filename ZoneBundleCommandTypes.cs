@@ -1,4 +1,6 @@
+using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace ZoneSavior;
 
@@ -32,6 +34,48 @@ internal static partial class ZoneBundleCommands
             {
                 TerrainApplied++;
             }
+        }
+    }
+
+    private sealed class ZoneLoadIssueSummary
+    {
+        private readonly Dictionary<string, int> _missingPrefabs = new(StringComparer.Ordinal);
+
+        public void AddMissingPrefab(string prefab)
+        {
+            if (_missingPrefabs.TryGetValue(prefab, out int count))
+            {
+                _missingPrefabs[prefab] = count + 1;
+                return;
+            }
+
+            _missingPrefabs[prefab] = 1;
+        }
+
+        public void Log(Vector2i targetZone, string tag)
+        {
+            if (_missingPrefabs.Count == 0)
+            {
+                return;
+            }
+
+            int total = _missingPrefabs.Values.Sum();
+            string sample = string.Join(
+                ", ",
+                _missingPrefabs
+                    .OrderByDescending(item => item.Value)
+                    .ThenBy(item => item.Key, StringComparer.Ordinal)
+                    .Take(8)
+                    .Select(item => item.Value == 1 ? item.Key : $"{item.Key} x{item.Value}"));
+            int extra = Math.Max(0, _missingPrefabs.Count - 8);
+            if (extra > 0)
+            {
+                sample += $", +{extra} more";
+            }
+
+            _logger.LogWarning(
+                $"Skipped {total} missing prefab entr{(total == 1 ? "y" : "ies")} while loading zone bundle '{tag}' " +
+                $"into ({targetZone.x},{targetZone.y}): {sample}.");
         }
     }
 

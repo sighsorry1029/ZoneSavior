@@ -1,5 +1,6 @@
 | `Version` | `Update Notes`                                                                                   |
 |-----------|--------------------------------------------------------------------------------------------------|
+| 1.1.0     | - Added runtime support grace for zones loaded with `zs_loadzone`, with Zone UI countdown display. <br> - Improved zone bundle restore stability for tamed animals and missing prefab entries. |
 | 1.0.10    | - Allowed RCON and dedicated server zone loads/restores to use nearby ZoneSavior clients as terrain witnesses when the server has not loaded the target terrain. |
 | 1.0.9     | - Removed admin terrain tool pieces from build tables when the player is not in the allowed admin/debug state. |
 | 1.0.8     | - Added safer Expand World Data and TerrainMistile compatibility for ZoneSavior terrain proxies. <br> - Cleaned watcher reload handling, terrain reset placement, and zone bundle capture/load internals. |

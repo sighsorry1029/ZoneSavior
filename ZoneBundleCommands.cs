@@ -1050,8 +1050,11 @@ internal static partial class ZoneBundleCommands
 
     private static ZoneLoadTotals ApplyLoadWork(IEnumerable<LoadWorkItem> work, TerrainPlacementContext? terrainContext, float yOffset)
     {
+        List<LoadWorkItem> items = work.ToList();
+        ZoneBundleSupportGrace.RegisterZones(items.Select(item => item.TargetZone));
+
         ZoneLoadTotals totals = default;
-        foreach (LoadWorkItem item in work)
+        foreach (LoadWorkItem item in items)
         {
             ZoneLoadStats stats = ApplyBundleToZone(item.TargetZone, item.Bundle, terrainContext, yOffset);
             totals.Add(stats, stats.TerrainApplied);
@@ -1177,8 +1180,11 @@ internal static partial class ZoneBundleCommands
         TerrainPreparationResult terrainPreparation,
         Action<ZoneLoadTotals> onComplete)
     {
+        List<LoadWorkItem> items = work.ToList();
+        ZoneBundleSupportGrace.RegisterZones(items.Select(item => item.TargetZone));
+
         ZoneLoadTotals totals = default;
-        foreach (LoadWorkItem item in work)
+        foreach (LoadWorkItem item in items)
         {
             ZoneLoadStats stats = default;
             bool applyTerrain = !terrainPreparation.WasClientPrepared(item.TargetZone);
@@ -2066,11 +2072,14 @@ internal static partial class ZoneBundleCommands
 
         int created = 0;
         Vector3 zoneCenter = ZoneSystem.GetZonePos(targetZone);
+        ZoneLoadIssueSummary issues = new();
         foreach (ZoneBundleEntry entry in bundle.Entries)
         {
-            created += TryCreateAndSpawnLoadedZdo(entry, zoneCenter, bundle, terrainContext, yOffset) ? 1 : 0;
+            created += TryCreateAndSpawnLoadedZdo(entry, zoneCenter, bundle, terrainContext, yOffset, issues) ? 1 : 0;
         }
 
+        issues.Log(targetZone, bundle.Tag);
+        RemoveStaleCharacterReferences();
         return new ZoneLoadStats(removed, created, terrainApplied);
     }
 
@@ -2101,9 +2110,10 @@ internal static partial class ZoneBundleCommands
         int created = 0;
         int processedSinceYield = 0;
         Vector3 zoneCenter = ZoneSystem.GetZonePos(targetZone);
+        ZoneLoadIssueSummary issues = new();
         foreach (ZoneBundleEntry entry in bundle.Entries)
         {
-            created += TryCreateAndSpawnLoadedZdo(entry, zoneCenter, bundle, terrainContext, yOffset) ? 1 : 0;
+            created += TryCreateAndSpawnLoadedZdo(entry, zoneCenter, bundle, terrainContext, yOffset, issues) ? 1 : 0;
 
             processedSinceYield++;
             if (processedSinceYield >= CaptureBatchSize)
@@ -2113,6 +2123,8 @@ internal static partial class ZoneBundleCommands
             }
         }
 
+        issues.Log(targetZone, bundle.Tag);
+        RemoveStaleCharacterReferences();
         onComplete(new ZoneLoadStats(removed, created, terrainApplied));
     }
 
@@ -2121,9 +2133,10 @@ internal static partial class ZoneBundleCommands
         Vector3 zoneCenter,
         ZoneBundleFile bundle,
         TerrainPlacementContext? terrainContext,
-        float yOffset)
+        float yOffset,
+        ZoneLoadIssueSummary issues)
     {
-        if (!TryCreateLoadedZdo(entry, zoneCenter, bundle, terrainContext, yOffset, out ZDO? zdo) || zdo == null)
+        if (!TryCreateLoadedZdo(entry, zoneCenter, bundle, terrainContext, yOffset, issues, out ZDO? zdo) || zdo == null)
         {
             return false;
         }
@@ -2138,6 +2151,7 @@ internal static partial class ZoneBundleCommands
         ZoneBundleFile bundle,
         TerrainPlacementContext? terrainContext,
         float yOffset,
+        ZoneLoadIssueSummary issues,
         out ZDO? zdo)
     {
         zdo = null;
@@ -2149,7 +2163,7 @@ internal static partial class ZoneBundleCommands
         GameObject prefab = ZNetScene.instance.GetPrefab(entry.Prefab);
         if (!prefab)
         {
-            _logger.LogWarning($"Missing prefab '{entry.Prefab}' while loading zone bundle.");
+            issues.AddMissingPrefab(entry.Prefab);
             return false;
         }
 

@@ -86,10 +86,12 @@ internal static class ZoneBundleConfig
     private static ConfigEntry<ZoneBundleWearNTearSaveMode> _wearNTearSaveMode = null!;
     private static ConfigEntry<float> _supportFillFeatherWidth = null!;
     private static ConfigEntry<float> _supportFillContactTolerance = null!;
+    private static ConfigEntry<float> _supportGraceMinutes = null!;
 
     public static ZoneBundleWearNTearSaveMode WearNTearSaveMode => _wearNTearSaveMode.Value;
     public static float SupportFillFeatherWidth => Mathf.Clamp(_supportFillFeatherWidth.Value, 0f, 64f);
     public static float SupportFillContactTolerance => Mathf.Clamp(_supportFillContactTolerance.Value, 0.01f, 2f);
+    public static float SupportGraceMinutes => Mathf.Clamp(_supportGraceMinutes.Value, 0f, 120f);
 
     public static void Bind(ZoneSaviorPlugin plugin)
     {
@@ -100,6 +102,14 @@ internal static class ZoneBundleConfig
             ConfigDescriptions.Ordered(
                 "Controls which WearNTear objects SupportFill saves. CreatorOnly saves only player-created WearNTear. IncludeCreatorless also saves WearNTear with no creator id.",
                 600));
+        _supportGraceMinutes = plugin.config(
+            ConfigSections.ZoneSavior,
+            "Zone Bundle Support Grace Minutes",
+            60f,
+            ConfigDescriptions.Ordered(
+                "Temporary runtime-only WearNTear support grace applied to target zones after zs_loadzone. Set to 0 to disable. This is not saved across server restarts.",
+                new AcceptableValueRange<float>(0f, 120f),
+                565));
         _supportFillFeatherWidth = plugin.config(
             ConfigSections.ZoneSavior,
             "Zone Bundle Support Fill Feather Width",

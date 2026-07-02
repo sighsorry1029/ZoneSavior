@@ -158,6 +158,7 @@
         <Compile Include="ZoneBundleModels.cs"/>
         <Compile Include="ZoneBundleRestoreReset.cs"/>
         <Compile Include="ZoneBundleSerialization.cs"/>
+        <Compile Include="ZoneBundleSupportGrace.cs"/>
         <Compile Include="ZoneBundleTerrainBaseLayer.cs"/>
         <Compile Include="ZoneBundleTerrainGrid.cs"/>
         <Compile Include="ZoneBundleTerrainPlanTypes.cs"/>

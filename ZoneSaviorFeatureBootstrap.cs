@@ -11,6 +11,7 @@ internal static class ZoneSaviorFeatureBootstrap
         ZoneLimitConfiguration.Initialize(ZoneSaviorPlugin.ConfigSync, logger);
         ZonePieceCounter.Initialize(logger);
         ZoneBundleCommands.Initialize(logger);
+        ZoneBundleSupportGrace.Initialize(logger);
         AutoArchiveStore.Initialize(logger);
         AutoArchiveService.Initialize(logger);
         AutoArchiveCommands.Initialize(logger);
@@ -28,6 +29,7 @@ internal static class ZoneSaviorFeatureBootstrap
     public static void Update()
     {
         ZoneBundleCommands.RegisterRpcs();
+        ZoneBundleSupportGrace.Update();
         AutoArchiveCommands.RegisterRpcs();
         ZoneWorldEditTerrainCompat.Update();
         AutoArchiveService.Update();
@@ -43,6 +45,7 @@ internal static class ZoneSaviorFeatureBootstrap
     public static void Shutdown()
     {
         ZonePieceCounter.Clear();
+        ZoneBundleSupportGrace.Shutdown();
         ZoneBoundaryOverlay.Shutdown();
         AutoArchiveService.Shutdown();
         AutoArchiveStore.Flush(force: true);

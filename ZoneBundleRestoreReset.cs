@@ -276,7 +276,7 @@ internal static partial class ZoneBundleCommands
             return false;
         }
 
-        DataHelper.Destroy(zdo);
+        DestroyOverwritableZdo(prefab, zdo);
         return true;
     }
 
