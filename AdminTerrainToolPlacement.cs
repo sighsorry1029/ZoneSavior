@@ -1,12 +1,21 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using BepInEx.Configuration;
+using HarmonyLib;
 using UnityEngine;
 
 namespace ZoneSavior;
 
 internal static partial class AdminTerrainTool
 {
+    private static readonly AdminTerrainPaintType[] PaintTypeValues = Enum.GetValues(typeof(AdminTerrainPaintType))
+        .Cast<AdminTerrainPaintType>()
+        .Distinct()
+        .OrderBy(value => (int)value)
+        .ToArray();
+
     private static bool TryGetProxyGhost(GameObject ghost, out GameObject proxyGhost)
     {
         proxyGhost = null!;
@@ -161,7 +170,7 @@ internal static partial class AdminTerrainTool
             _runtimePaintTypeInitialized = true;
         }
 
-        if (!GetPaintTypeValues().Contains(_runtimePaintType))
+        if (!PaintTypeValues.Contains(_runtimePaintType))
         {
             _runtimePaintType = configValue;
         }
@@ -171,7 +180,7 @@ internal static partial class AdminTerrainTool
 
     private static AdminTerrainPaintType RotatePaintType(AdminTerrainPaintType current, float direction)
     {
-        AdminTerrainPaintType[] values = GetPaintTypeValues();
+        AdminTerrainPaintType[] values = PaintTypeValues;
         int index = Array.IndexOf(values, current);
         if (index < 0)
         {
@@ -186,15 +195,6 @@ internal static partial class AdminTerrainTool
         int offset = direction > 0f ? 1 : -1;
         int next = (index + offset + values.Length) % values.Length;
         return values[next];
-    }
-
-    private static AdminTerrainPaintType[] GetPaintTypeValues()
-    {
-        return Enum.GetValues(typeof(AdminTerrainPaintType))
-            .Cast<AdminTerrainPaintType>()
-            .Distinct()
-            .OrderBy(value => (int)value)
-            .ToArray();
     }
 
     private static bool IsTerrainProxyObject(GameObject obj)
@@ -316,5 +316,47 @@ internal static partial class AdminTerrainTool
 
         _hasPendingSlopeStart = false;
         _pendingSlopeStartFrame = 0;
+    }
+}
+
+[HarmonyPatch(typeof(Player), "UpdatePlacementGhost")]
+internal static class AdminTerrainToolPlacementGhostPatch
+{
+    [HarmonyPriority(Priority.Last)]
+    private static void Postfix(Player __instance)
+    {
+        AdminTerrainTool.PreparePlacementGhost(__instance);
+    }
+}
+
+[HarmonyPatch(typeof(Player), nameof(Player.UpdatePlacement))]
+internal static class AdminTerrainToolPlacementWheelPatch
+{
+    private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+    {
+        MethodInfo original = AccessTools.Method(typeof(ZInput), nameof(ZInput.GetMouseScrollWheel));
+        MethodInfo replacement = AccessTools.Method(typeof(AdminTerrainTool), nameof(AdminTerrainTool.GetPlacementMouseScrollWheel));
+        if (original == null || replacement == null)
+        {
+            return instructions;
+        }
+
+        return ReplaceMouseScrollWheel(instructions, original, replacement);
+    }
+
+    private static IEnumerable<CodeInstruction> ReplaceMouseScrollWheel(
+        IEnumerable<CodeInstruction> instructions,
+        MethodInfo original,
+        MethodInfo replacement)
+    {
+        foreach (CodeInstruction instruction in instructions)
+        {
+            if (instruction.Calls(original))
+            {
+                instruction.operand = replacement;
+            }
+
+            yield return instruction;
+        }
     }
 }

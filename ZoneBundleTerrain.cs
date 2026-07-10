@@ -9,8 +9,6 @@ namespace ZoneSavior;
 
 internal static partial class ZoneBundleTerrain
 {
-    internal const string SupportFillMode = "support-fill-v1";
-
     private const float SearchRadius = 48f;
     private const float SupportFillSampleStep = 1f;
     private const float SupportFillClearance = 0.05f;
@@ -18,24 +16,9 @@ internal static partial class ZoneBundleTerrain
     private const float FallbackColliderSampleStep = 0.5f;
     private const float FallbackMaxColliderDepthBelowOrigin = 8f;
     private const float FallbackMaxTerrainDelta = 16f;
+    private const float NativeMaxTerrainDelta = 8f;
     private const int TerrainContextEntryBatchSize = 128;
     private const int TerrainApplyNodeBatchSize = 1024;
-    private static readonly int SupportFillBaseLayerHash = StringExtensionMethods.GetStableHashCode(ZoneSaviorPlugin.ModGUID + ".terrain_base_v1");
-    private static readonly TerrainSupportStrategy SavedContactStrategy = new SavedContactTerrainStrategy();
-    private static readonly TerrainSupportStrategy ColliderFallbackStrategy = new ColliderFallbackTerrainStrategy();
-
-    public static TerrainSourceAnchor ComputeSupportAnchor(IEnumerable<Vector2i> zones)
-    {
-        float min = float.PositiveInfinity;
-        float tamedFallbackMin = float.PositiveInfinity;
-
-        foreach (Vector2i zone in zones)
-        {
-            AccumulateSupportAnchor(zone, ref min, ref tamedFallbackMin);
-        }
-
-        return CreateTerrainSourceAnchor(min, tamedFallbackMin);
-    }
 
     public static IEnumerator ComputeSupportAnchorAsync(IEnumerable<Vector2i> zones, Action<TerrainSourceAnchor> onComplete)
     {
@@ -88,40 +71,25 @@ internal static partial class ZoneBundleTerrain
             : new TerrainSourceAnchor(tamedFallbackMin);
     }
 
-    public static TerrainPlacementContext? CreateSupportFillPlacementContext(IEnumerable<TerrainSupportTarget> targets)
-    {
-        List<TerrainSupportTarget> targetList = targets.ToList();
-        List<PlacementSupportSampleSet> sampleSets = targetList
-            .Select(target =>
-            {
-                TerrainSupportStrategy strategy = SelectPlacementStrategy(target);
-                return new PlacementSupportSampleSet(strategy, strategy.CollectPlacementSamples(target));
-            })
-            .Where(set => set.Samples.Count > 0)
-            .ToList();
-
-        return BuildSupportFillPlacementContext(sampleSets);
-    }
-
     public static IEnumerator CreateSupportFillPlacementContextAsync(IEnumerable<TerrainSupportTarget> targets, Action<TerrainPlacementContext?> onComplete)
     {
         List<PlacementSupportSampleSet> sampleSets = [];
         foreach (TerrainSupportTarget target in targets.ToList())
         {
-            TerrainSupportStrategy strategy = SelectPlacementStrategy(target);
+            bool usesSavedContacts = target.ContactsCaptured && target.Contacts.Count > 0;
             List<TerrainSupportSample> samples = [];
-            if (strategy == ColliderFallbackStrategy)
+            if (usesSavedContacts)
             {
-                yield return CollectSupportSamplesAsync(target.Zone, target.Entries, target.SourceBaseY, value => samples = value);
+                samples = CollectSavedContactSamples(target.Zone, target.Contacts);
             }
             else
             {
-                samples = strategy.CollectPlacementSamples(target);
+                yield return CollectSupportSamplesAsync(target.Zone, target.Entries, target.SourceBaseY, value => samples = value);
             }
 
             if (samples.Count > 0)
             {
-                sampleSets.Add(new PlacementSupportSampleSet(strategy, samples));
+                sampleSets.Add(new PlacementSupportSampleSet(usesSavedContacts, samples));
             }
 
             yield return null;
@@ -139,9 +107,10 @@ internal static partial class ZoneBundleTerrain
         }
 
         List<TerrainSupportSample> footprintSamples = CollapseToLowestSupportSamples(samples);
-        bool hasSavedContacts = sampleSets.Any(set => set.Strategy == SavedContactStrategy);
-        TerrainSupportStrategy baseStrategy = hasSavedContacts ? SavedContactStrategy : ColliderFallbackStrategy;
-        float baseWorldY = baseStrategy.ResolveBaseWorldY(footprintSamples);
+        bool hasSavedContacts = sampleSets.Any(set => set.UsesSavedContacts);
+        float baseWorldY = hasSavedContacts
+            ? ResolveSupportFillBaseWorldY(footprintSamples)
+            : ResolveFallbackSupportBaseWorldY(footprintSamples);
 
         TerrainPlacementContext context = new()
         {
@@ -150,7 +119,7 @@ internal static partial class ZoneBundleTerrain
 
         foreach (TerrainSupportSample sample in footprintSamples)
         {
-            if (!hasSavedContacts && !ColliderFallbackStrategy.IsPlacementTargetUsable(sample, baseWorldY))
+            if (!hasSavedContacts && !IsReasonableFallbackSupportTarget(sample, baseWorldY))
             {
                 continue;
             }
@@ -187,25 +156,6 @@ internal static partial class ZoneBundleTerrain
         return ZoneTerrainContactSampler.ToZoneBundleContacts(zone, sourceBaseY, worldContacts);
     }
 
-    public static bool ApplySupportFill(
-        Vector2i zone,
-        IEnumerable<ZoneBundleEntry> entries,
-        IEnumerable<ZoneBundleTerrainContact> contacts,
-        bool contactsCaptured,
-        TerrainPlacementContext context)
-    {
-        TerrainSupportApplicationPlan plan = CreateSupportPlan(
-            zone,
-            entries,
-            contacts,
-            contactsCaptured,
-            context,
-            out Heightmap heightmap,
-            out TerrainSupportApplyOptions applyOptions);
-        return plan.HasSupport &&
-               ApplySupportCellsToHeightmap(heightmap, plan.SupportHeights, plan.SupportCells, applyOptions);
-    }
-
     public static bool HasApplicableSupportFill(
         Vector2i zone,
         IEnumerable<ZoneBundleEntry> entries,
@@ -219,7 +169,6 @@ internal static partial class ZoneBundleTerrain
             contacts,
             contactsCaptured,
             context,
-            out _,
             out _).HasSupport;
     }
 
@@ -237,8 +186,7 @@ internal static partial class ZoneBundleTerrain
             contacts,
             contactsCaptured,
             context,
-            out Heightmap heightmap,
-            out TerrainSupportApplyOptions applyOptions);
+            out Heightmap heightmap);
 
         if (!plan.HasSupport)
         {
@@ -247,7 +195,12 @@ internal static partial class ZoneBundleTerrain
         }
 
         bool changed = false;
-        yield return ApplySupportCellsToHeightmapAsync(heightmap, plan.SupportHeights, plan.SupportCells, applyOptions, result => changed = result);
+        yield return ApplySupportCellsToHeightmapAsync(
+            heightmap,
+            plan.SupportHeights,
+            plan.SupportCells,
+            ZoneBundleConfig.SupportFillFeatherWidth,
+            result => changed = result);
         onComplete(changed);
     }
 
@@ -267,19 +220,24 @@ internal static partial class ZoneBundleTerrain
         IEnumerable<ZoneBundleTerrainContact> contacts,
         bool contactsCaptured,
         TerrainPlacementContext context,
-        out Heightmap heightmap,
-        out TerrainSupportApplyOptions applyOptions)
+        out Heightmap heightmap)
     {
         List<ZoneBundleTerrainContact> contactList = contacts.ToList();
         bool hasContacts = contactsCaptured && contactList.Count > 0;
-        applyOptions = TerrainSupportApplyOptions.ZoneBundle();
 
         if (!TryGetHeightmap(zone, out heightmap))
         {
             throw new InvalidOperationException($"Target zone ({zone.x},{zone.y}) is not loaded for support terrain placement.");
         }
 
-        return BuildSupportPlan(zone, entries, contactList, hasContacts, context, heightmap, applyOptions);
+        return BuildSupportPlan(
+            zone,
+            entries,
+            contactList,
+            hasContacts,
+            context,
+            heightmap,
+            ZoneBundleConfig.SupportFillFeatherWidth);
     }
 
     private static TerrainSupportApplicationPlan BuildSupportPlan(
@@ -289,20 +247,22 @@ internal static partial class ZoneBundleTerrain
         bool hasContacts,
         TerrainPlacementContext context,
         Heightmap heightmap,
-        TerrainSupportApplyOptions applyOptions)
+        float featherWidth)
     {
         Dictionary<long, float> supportHeights = [];
         if (context.SupportRelativeHeights.Count > 0)
         {
-            AddContextSupportHeights(context, heightmap, applyOptions.FeatherWidth, supportHeights);
+            AddContextSupportHeights(context, heightmap, featherWidth, supportHeights);
         }
         else
         {
-            TerrainSupportStrategy strategy = SelectApplyStrategy(hasContacts);
-            foreach (TerrainSupportSample sample in strategy.CollectApplySamples(zone, entries, contacts))
+            IEnumerable<TerrainSupportSample> samples = hasContacts
+                ? CollectSavedContactSamples(zone, contacts)
+                : CollectSupportSamples(zone, entries);
+            foreach (TerrainSupportSample sample in samples)
             {
                 float targetHeight = context.BaseWorldY + sample.RelativeY - SupportFillClearance;
-                if (!strategy.IsApplyTargetUsable(sample, targetHeight))
+                if (!hasContacts && !IsReasonableFallbackTarget(sample.WorldX, sample.WorldZ, targetHeight))
                 {
                     continue;
                 }
@@ -379,75 +339,6 @@ internal static partial class ZoneBundleTerrain
         return TryGetCurrentTerrainHeight(x, z, out height);
     }
 
-    public static bool ApplyWorldSupportContacts(IEnumerable<Vector3> supportContacts)
-    {
-        WorldSupportContactPlan plan = BuildWorldSupportContactPlan(supportContacts);
-        if (!plan.HasSupport)
-        {
-            return false;
-        }
-
-        bool changed = false;
-        foreach (Vector2i zone in plan.Zones)
-        {
-            if (!TryGetHeightmap(zone, out Heightmap heightmap))
-            {
-                throw new InvalidOperationException($"Target terrain zone ({zone.x},{zone.y}) is not loaded for support contact placement.");
-            }
-
-            changed |= ApplySupportCellsToHeightmap(heightmap, plan.SupportHeights, plan.SupportCells, TerrainSupportApplyOptions.SupportContacts());
-        }
-
-        return changed;
-    }
-
-    public static IEnumerator ApplyWorldSupportContactsAsync(IEnumerable<Vector3> supportContacts, Action<bool> onComplete)
-    {
-        WorldSupportContactPlan plan = BuildWorldSupportContactPlan(supportContacts);
-        if (!plan.HasSupport)
-        {
-            onComplete(false);
-            yield break;
-        }
-
-        bool changed = false;
-        foreach (Vector2i zone in plan.Zones)
-        {
-            if (!TryGetHeightmap(zone, out Heightmap heightmap))
-            {
-                onComplete(false);
-                yield break;
-            }
-
-            bool zoneChanged = false;
-            yield return ApplySupportCellsToHeightmapAsync(heightmap, plan.SupportHeights, plan.SupportCells, TerrainSupportApplyOptions.SupportContacts(), result => zoneChanged = result);
-            changed |= zoneChanged;
-            yield return null;
-        }
-
-        onComplete(changed);
-    }
-
-    private static WorldSupportContactPlan BuildWorldSupportContactPlan(IEnumerable<Vector3> supportContacts)
-    {
-        List<TerrainSupportCell> supportCells = supportContacts
-            .Select(contact => new TerrainSupportCell(
-                Mathf.RoundToInt(contact.x),
-                Mathf.RoundToInt(contact.z),
-                contact.y - SupportFillClearance))
-            .GroupBy(cell => PackCell(cell.X, cell.Z))
-            .Select(group => group.OrderBy(cell => cell.Height).First())
-            .ToList();
-
-        Dictionary<long, float> supportHeights = supportCells.ToDictionary(cell => PackCell(cell.X, cell.Z), cell => cell.Height);
-        List<Vector2i> zones = supportCells
-            .Select(cell => ZoneSystem.GetZone(new Vector3(cell.X, 0f, cell.Z)))
-            .Distinct()
-            .ToList();
-
-        return new WorldSupportContactPlan(supportHeights, supportCells, zones);
-    }
-
     private static bool TryGetFeatheredSupportHeight(Vector3 node, float baseHeight, TerrainSupportCellIndex supportIndex, float featherWidth, out float height)
     {
         height = baseHeight;
@@ -469,40 +360,16 @@ internal static partial class ZoneBundleTerrain
         return true;
     }
 
-    private static bool ApplySupportCellsToHeightmap(
-        Heightmap heightmap,
-        Dictionary<long, float> supportHeights,
-        List<TerrainSupportCell> supportCells,
-        TerrainSupportApplyOptions applyOptions)
-    {
-        int width = heightmap.m_width + 1;
-        float[] worldHeights = new float[width * width];
-        Color[] paints = new Color[width * width];
-        TerrainSupportCellIndex supportIndex = new(supportCells, applyOptions.FeatherWidth);
-        bool changed = false;
-
-        for (int z = 0; z < width; z++)
-        {
-            for (int x = 0; x < width; x++)
-            {
-                changed |= ComputeSupportNode(heightmap, width, x, z, supportHeights, supportIndex, applyOptions, worldHeights, paints);
-            }
-        }
-
-        return changed && PersistAppliedSupportCells(heightmap, width, worldHeights, paints, applyOptions);
-    }
-
     private static IEnumerator ApplySupportCellsToHeightmapAsync(
         Heightmap heightmap,
         Dictionary<long, float> supportHeights,
         List<TerrainSupportCell> supportCells,
-        TerrainSupportApplyOptions applyOptions,
+        float featherWidth,
         Action<bool> onComplete)
     {
         int width = heightmap.m_width + 1;
         float[] worldHeights = new float[width * width];
-        Color[] paints = new Color[width * width];
-        TerrainSupportCellIndex supportIndex = new(supportCells, applyOptions.FeatherWidth);
+        TerrainSupportCellIndex supportIndex = new(supportCells, featherWidth);
         bool changed = false;
         int processed = 0;
 
@@ -510,7 +377,7 @@ internal static partial class ZoneBundleTerrain
         {
             for (int x = 0; x < width; x++)
             {
-                changed |= ComputeSupportNode(heightmap, width, x, z, supportHeights, supportIndex, applyOptions, worldHeights, paints);
+                changed |= ComputeSupportNode(heightmap, width, x, z, supportHeights, supportIndex, featherWidth, worldHeights);
                 processed++;
                 if (processed >= TerrainApplyNodeBatchSize)
                 {
@@ -526,7 +393,7 @@ internal static partial class ZoneBundleTerrain
             yield break;
         }
 
-        PersistAppliedSupportCells(heightmap, width, worldHeights, paints, applyOptions);
+        PersistAppliedSupportCells(heightmap, width, worldHeights);
         onComplete(true);
     }
 
@@ -537,24 +404,21 @@ internal static partial class ZoneBundleTerrain
         int z,
         Dictionary<long, float> supportHeights,
         TerrainSupportCellIndex supportIndex,
-        TerrainSupportApplyOptions applyOptions,
-        float[] worldHeights,
-        Color[] paints)
+        float featherWidth,
+        float[] worldHeights)
     {
         int index = z * width + x;
         Vector3 node = VertexToWorld(heightmap, x, z);
         float current = GetWorldHeight(heightmap, x, z);
         float baseHeight = TryGetTerrainBaseHeight(node.x, node.z, out float terrainBaseHeight) ? terrainBaseHeight : current;
         float desired = baseHeight;
-        paints[index] = GetPaint(heightmap, x, z);
-
         if (supportHeights.TryGetValue(PackCell(Mathf.RoundToInt(node.x), Mathf.RoundToInt(node.z)), out float targetHeight))
         {
-            desired = applyOptions.ClampTerrainDelta(targetHeight, baseHeight);
+            desired = ClampTerrainDelta(targetHeight, baseHeight);
         }
-        else if (TryGetFeatheredSupportHeight(node, baseHeight, supportIndex, applyOptions.FeatherWidth, out float featheredHeight))
+        else if (TryGetFeatheredSupportHeight(node, baseHeight, supportIndex, featherWidth, out float featheredHeight))
         {
-            desired = applyOptions.ClampTerrainDelta(featheredHeight, baseHeight);
+            desired = ClampTerrainDelta(featheredHeight, baseHeight);
         }
 
         worldHeights[index] = desired;
@@ -564,15 +428,73 @@ internal static partial class ZoneBundleTerrain
     private static bool PersistAppliedSupportCells(
         Heightmap heightmap,
         int width,
-        float[] worldHeights,
-        Color[] paints,
-        TerrainSupportApplyOptions applyOptions)
+        float[] worldHeights)
     {
         TerrainComp compiler = heightmap.GetAndCreateTerrainCompiler();
-        PersistSupportFillTerrain(compiler, width, worldHeights, paints, applyOptions);
+        PersistSupportFillTerrain(compiler, width, worldHeights);
         heightmap.Poke(delayed: false);
         ClutterSystem.instance?.ResetGrass(heightmap.transform.position, SearchRadius);
         return true;
+    }
+
+    private static void PersistSupportFillTerrain(
+        TerrainComp compiler,
+        int width,
+        float[] worldHeights)
+    {
+        if (!IsCompilerReady(compiler))
+        {
+            throw new InvalidOperationException("Target terrain compiler is not network ready.");
+        }
+
+        int count = width * width;
+        if (worldHeights.Length != count ||
+            compiler.m_modifiedHeight.Length != count ||
+            compiler.m_levelDelta.Length != count ||
+            compiler.m_smoothDelta.Length != count)
+        {
+            throw new InvalidOperationException("Target terrain compiler size does not match the heightmap.");
+        }
+
+        if (!compiler.m_nview.IsOwner())
+        {
+            compiler.m_nview.ClaimOwnership();
+        }
+
+        for (int index = 0; index < count; index++)
+        {
+            int z = index / width;
+            int x = index - z * width;
+            float nativeHeight = GetTerrainBaseOrCurrentHeight(compiler.m_hmap, x, z);
+            float delta = Mathf.Clamp(worldHeights[index] - nativeHeight, -NativeMaxTerrainDelta, NativeMaxTerrainDelta);
+            compiler.m_smoothDelta[index] = 0f;
+            compiler.m_levelDelta[index] = delta;
+            compiler.m_modifiedHeight[index] = Mathf.Abs(delta) > 0.01f;
+        }
+
+        PersistCompiler(compiler);
+    }
+
+    private static float ClampTerrainDelta(float desired, float nativeHeight)
+    {
+        return Mathf.Clamp(
+            desired,
+            nativeHeight - NativeMaxTerrainDelta,
+            nativeHeight + NativeMaxTerrainDelta);
+    }
+
+    private static void PersistCompiler(TerrainComp compiler)
+    {
+        if (compiler.m_nview != null && compiler.m_nview.IsValid() && !compiler.m_nview.IsOwner())
+        {
+            compiler.m_nview.ClaimOwnership();
+        }
+
+        compiler.m_operations++;
+        compiler.m_lastOpPoint = Vector3.zero;
+        compiler.m_lastOpRadius = 0f;
+        compiler.Save();
+        compiler.m_hmap.Poke(delayed: false);
     }
 
     private static float GetWorldHeight(Heightmap heightmap, int x, int z)
@@ -610,13 +532,6 @@ internal static partial class ZoneBundleTerrain
         return Heightmap.GetHeight(new Vector3(x, 0f, z), out height);
     }
 
-    private static Color GetPaint(Heightmap heightmap, int x, int z)
-    {
-        int px = Mathf.Clamp(x, 0, heightmap.m_width);
-        int pz = Mathf.Clamp(z, 0, heightmap.m_width);
-        return heightmap.GetPaintMask(px, pz);
-    }
-
     private static bool TryGetHeightmap(Vector2i zone, out Heightmap heightmap)
     {
         heightmap = null!;
@@ -645,4 +560,108 @@ internal static partial class ZoneBundleTerrain
         return nview != null && nview.IsValid();
     }
 
+    private sealed class TerrainSupportApplicationPlan
+    {
+        public TerrainSupportApplicationPlan(Dictionary<long, float> supportHeights, List<TerrainSupportCell> supportCells)
+        {
+            SupportHeights = supportHeights;
+            SupportCells = supportCells;
+        }
+
+        public Dictionary<long, float> SupportHeights { get; }
+        public List<TerrainSupportCell> SupportCells { get; }
+        public bool HasSupport => SupportHeights.Count > 0;
+    }
+
+    private readonly struct TerrainSupportCell
+    {
+        public TerrainSupportCell(int x, int z, float height)
+        {
+            X = x;
+            Z = z;
+            Height = height;
+        }
+
+        public int X { get; }
+        public int Z { get; }
+        public float Height { get; }
+    }
+
+    private sealed class TerrainSupportCellIndex
+    {
+        private readonly Dictionary<long, List<TerrainSupportCell>> _cellsByBucket = [];
+        private readonly float _bucketSize;
+        private readonly int _searchRadius;
+
+        public TerrainSupportCellIndex(IEnumerable<TerrainSupportCell> cells, float featherWidth)
+        {
+            _bucketSize = Mathf.Max(1f, featherWidth);
+            _searchRadius = Mathf.Max(0, Mathf.CeilToInt(featherWidth / _bucketSize));
+            foreach (TerrainSupportCell cell in cells)
+            {
+                long key = PackCell(ToBucket(cell.X), ToBucket(cell.Z));
+                if (!_cellsByBucket.TryGetValue(key, out List<TerrainSupportCell> bucket))
+                {
+                    bucket = [];
+                    _cellsByBucket[key] = bucket;
+                }
+
+                bucket.Add(cell);
+            }
+        }
+
+        public bool TryGetNearest(Vector3 node, float maxDistanceSqr, out TerrainSupportCell nearest, out float bestDistanceSqr)
+        {
+            nearest = default;
+            bestDistanceSqr = float.PositiveInfinity;
+            if (_cellsByBucket.Count == 0)
+            {
+                return false;
+            }
+
+            int bucketX = ToBucket(node.x);
+            int bucketZ = ToBucket(node.z);
+            for (int z = bucketZ - _searchRadius; z <= bucketZ + _searchRadius; z++)
+            {
+                for (int x = bucketX - _searchRadius; x <= bucketX + _searchRadius; x++)
+                {
+                    if (!_cellsByBucket.TryGetValue(PackCell(x, z), out List<TerrainSupportCell> bucket))
+                    {
+                        continue;
+                    }
+
+                    foreach (TerrainSupportCell cell in bucket)
+                    {
+                        float dx = node.x - cell.X;
+                        float dz = node.z - cell.Z;
+                        float distanceSqr = dx * dx + dz * dz;
+                        if (distanceSqr >= bestDistanceSqr || distanceSqr > maxDistanceSqr)
+                        {
+                            continue;
+                        }
+
+                        bestDistanceSqr = distanceSqr;
+                        nearest = cell;
+                    }
+                }
+            }
+
+            return !float.IsPositiveInfinity(bestDistanceSqr);
+        }
+
+        private int ToBucket(float value)
+        {
+            return Mathf.FloorToInt(value / _bucketSize);
+        }
+    }
+
+    internal readonly struct TerrainSourceAnchor
+    {
+        public TerrainSourceAnchor(float baseWorldY)
+        {
+            BaseWorldY = baseWorldY;
+        }
+
+        public float BaseWorldY { get; }
+    }
 }

@@ -15,17 +15,6 @@ internal static class ZoneBundleTerrainGrid
         z = (int)key;
     }
 
-    public static bool IsValidPayloadIndex(int index, int width, int length)
-    {
-        return width > 0 && index >= 0 && index < length && index < width * width;
-    }
-
-    public static void IndexToXZ(int index, int width, out int x, out int z)
-    {
-        z = index / width;
-        x = index - z * width;
-    }
-
     public static Vector3 VertexToWorld(Heightmap heightmap, int x, int z)
     {
         Vector3 position = heightmap.transform.position;

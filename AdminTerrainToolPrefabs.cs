@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using BepInEx.Configuration;
+using HarmonyLib;
 using UnityEngine;
 
 namespace ZoneSavior;
@@ -365,5 +366,42 @@ internal static partial class AdminTerrainTool
         piece.m_icon = GetIcon(slope, reset, paint, paintReset);
         piece.m_description = GetPieceDescription(prefab);
         return prefab;
+    }
+}
+
+[HarmonyPatch(typeof(ZNetScene), nameof(ZNetScene.Awake))]
+internal static class AdminTerrainToolScenePatch
+{
+    private static void Postfix()
+    {
+        AdminTerrainTool.Update();
+    }
+}
+
+[HarmonyPatch(typeof(ZNetScene), "CreateObject")]
+internal static class AdminTerrainToolCreateObjectPatch
+{
+    private static bool Prefix(ZDO zdo, ref GameObject __result)
+    {
+        return !AdminTerrainTool.TryCreateLoadedProxy(zdo, ref __result);
+    }
+}
+
+[HarmonyPatch(typeof(PieceTable), nameof(PieceTable.UpdateAvailable))]
+internal static class AdminTerrainToolPieceTablePatch
+{
+    private static void Postfix(PieceTable __instance, Player player)
+    {
+        AdminTerrainTool.AddToAvailablePieces(__instance, player);
+    }
+}
+
+[HarmonyPatch(typeof(Player), nameof(Player.UpdateKnownRecipesList))]
+internal static class AdminTerrainToolKnownRecipesPatch
+{
+    [HarmonyPriority(Priority.First)]
+    private static void Prefix(Player __instance)
+    {
+        AdminTerrainTool.SanitizeKnownRecipePieceTables(__instance);
     }
 }

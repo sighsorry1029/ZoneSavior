@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using BepInEx.Logging;
@@ -54,8 +55,7 @@ internal static class AutoArchiveStore
         {
             if (!File.Exists(FilePath))
             {
-                State = new AutoArchiveState();
-                RebuildIndexes();
+                ReplaceState(new AutoArchiveState());
                 _dirty = true;
                 Flush(force: true);
                 return;
@@ -68,17 +68,32 @@ internal static class AutoArchiveStore
                     throw new InvalidDataException(error);
                 }
 
-                State = state;
-                RebuildIndexes();
+                ReplaceState(state);
                 _dirty = false;
             }
             catch (Exception ex)
             {
+                BackupInvalidActivityFile();
                 _logger.LogError($"Failed to load auto archive activity file, using a blank state: {ex}");
-                State = new AutoArchiveState();
-                RebuildIndexes();
+                ReplaceState(new AutoArchiveState());
                 _dirty = true;
             }
+        }
+    }
+
+    private static void BackupInvalidActivityFile()
+    {
+        try
+        {
+            string directory = Path.GetDirectoryName(FilePath)!;
+            string timestamp = DateTime.UtcNow.ToString("yyyyMMdd_HHmmss_fff", CultureInfo.InvariantCulture);
+            string backupPath = Path.Combine(directory, $"activity.invalid.{timestamp}.yml");
+            File.Copy(FilePath, backupPath, overwrite: false);
+            _logger.LogWarning($"Backed up invalid auto archive activity data to '{backupPath}'.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning($"Failed to back up invalid auto archive activity data: {ex.Message}");
         }
     }
 
@@ -97,8 +112,7 @@ internal static class AutoArchiveStore
                 return;
             }
 
-            Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-            File.WriteAllText(FilePath, Serializer.Serialize(State));
+            ZoneSaviorFiles.WriteAllTextAtomic(FilePath, Serializer.Serialize(State));
             _lastFlushUtc = now;
             _lastInternalWriteUtc = now;
             _dirty = false;
@@ -139,8 +153,7 @@ internal static class AutoArchiveStore
                 return false;
             }
 
-            State = state;
-            RebuildIndexes();
+            ReplaceState(state);
             _dirty = false;
             message = "Activity reload complete.";
             return true;
@@ -434,18 +447,63 @@ internal static class AutoArchiveStore
         RebuildPlayerIndexes();
     }
 
-    private static void RebuildIndexes()
-    {
-        RebuildPlayerIndexes();
-    }
-
     private static void RebuildPlayerIndexes()
     {
-        PlayersByPlatform.Clear();
-        PlayersById.Clear();
-        foreach (PlayerActivityRecord player in State.Players)
+        BuildPlayerIndexes(
+            State,
+            out Dictionary<string, PlayerActivityRecord> playersByPlatform,
+            out Dictionary<long, PlayerActivityRecord> playersById);
+        ReplaceIndexes(playersByPlatform, playersById);
+    }
+
+    private static void ReplaceState(AutoArchiveState state)
+    {
+        BuildPlayerIndexes(
+            state,
+            out Dictionary<string, PlayerActivityRecord> playersByPlatform,
+            out Dictionary<long, PlayerActivityRecord> playersById);
+        State = state;
+        ReplaceIndexes(playersByPlatform, playersById);
+    }
+
+    private static void BuildPlayerIndexes(
+        AutoArchiveState state,
+        out Dictionary<string, PlayerActivityRecord> playersByPlatform,
+        out Dictionary<long, PlayerActivityRecord> playersById)
+    {
+        playersByPlatform = new Dictionary<string, PlayerActivityRecord>(StringComparer.Ordinal);
+        playersById = [];
+        foreach (PlayerActivityRecord player in state.Players)
         {
-            IndexPlayer(player);
+            if (!string.IsNullOrWhiteSpace(player.PlatformId))
+            {
+                playersByPlatform[player.PlatformId] = player;
+            }
+
+            foreach (long playerId in player.PlayerIds)
+            {
+                if (playerId != 0L)
+                {
+                    playersById[playerId] = player;
+                }
+            }
+        }
+    }
+
+    private static void ReplaceIndexes(
+        Dictionary<string, PlayerActivityRecord> playersByPlatform,
+        Dictionary<long, PlayerActivityRecord> playersById)
+    {
+        PlayersByPlatform.Clear();
+        foreach (KeyValuePair<string, PlayerActivityRecord> pair in playersByPlatform)
+        {
+            PlayersByPlatform[pair.Key] = pair.Value;
+        }
+
+        PlayersById.Clear();
+        foreach (KeyValuePair<long, PlayerActivityRecord> pair in playersById)
+        {
+            PlayersById[pair.Key] = pair.Value;
         }
     }
 
@@ -483,7 +541,7 @@ internal static class AutoArchiveStore
         {
             string yaml = File.ReadAllText(FilePath);
             state = Deserializer.Deserialize<AutoArchiveState>(yaml) ?? new AutoArchiveState();
-            NormalizeState(state);
+            ValidateState(state);
             return true;
         }
         catch (Exception ex)
@@ -493,10 +551,44 @@ internal static class AutoArchiveStore
         }
     }
 
-    private static void NormalizeState(AutoArchiveState state)
+    private static void ValidateState(AutoArchiveState state)
     {
-        state.Players ??= [];
-        state.Runs ??= [];
+        if (state.Version != AutoArchiveState.CurrentVersion)
+        {
+            throw new InvalidDataException($"Unsupported activity version {state.Version}.");
+        }
+
+        if (state.Players == null || state.Runs == null)
+        {
+            throw new InvalidDataException("Activity players or runs list is missing.");
+        }
+
+        for (int index = 0; index < state.Players.Count; index++)
+        {
+            PlayerActivityRecord? player = state.Players[index];
+            if (player == null || player.PlatformId == null || player.PlayerIds == null || player.Names == null)
+            {
+                throw new InvalidDataException($"Activity player record {index} is invalid.");
+            }
+        }
+
+        for (int runIndex = 0; runIndex < state.Runs.Count; runIndex++)
+        {
+            ArchiveRunRecord? run = state.Runs[runIndex];
+            if (run == null || run.TargetPlayerIds == null || run.Clusters == null || run.Messages == null)
+            {
+                throw new InvalidDataException($"Activity run record {runIndex} is invalid.");
+            }
+
+            for (int clusterIndex = 0; clusterIndex < run.Clusters.Count; clusterIndex++)
+            {
+                ArchiveClusterRecord? cluster = run.Clusters[clusterIndex];
+                if (cluster == null || cluster.Creators == null || cluster.Zones == null || cluster.Zones.Any(zone => zone == null))
+                {
+                    throw new InvalidDataException($"Activity run {runIndex} cluster {clusterIndex} is invalid.");
+                }
+            }
+        }
     }
 
     private static void AddDistinct<T>(List<T> values, T value)

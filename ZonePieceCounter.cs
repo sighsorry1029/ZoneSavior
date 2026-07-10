@@ -55,46 +55,10 @@ internal static class ZonePieceCounter
         }
     }
 
-    public static bool CanAddWearNTears(IEnumerable<Vector3> positions, out string reason)
-    {
-        if (!ZoneLimitConfiguration.Enabled)
-        {
-            reason = "";
-            return true;
-        }
-
-        Dictionary<Vector2i, int> additions = [];
-        foreach (Vector3 position in positions)
-        {
-            Vector2i zone = ZoneSystem.GetZone(position);
-            additions[zone] = additions.TryGetValue(zone, out int count) ? count + 1 : 1;
-        }
-
-        foreach (KeyValuePair<Vector2i, int> item in additions)
-        {
-            if (!ZoneLimitConfiguration.TryGetRule(item.Key, out ZoneLimitRule rule))
-            {
-                continue;
-            }
-
-            int current = GetCount(item.Key);
-            int projected = current + item.Value;
-            if (projected > rule.Limit)
-            {
-                reason = $"WearNTear zone limit would be exceeded at ({item.Key.x},{item.Key.y}): {projected}/{rule.Limit}.";
-                return false;
-            }
-        }
-
-        reason = "";
-        return true;
-    }
-
     public static void Refresh(Piece piece)
     {
         if (!ZoneLimitConfiguration.Enabled)
         {
-            Clear();
             return;
         }
 
@@ -110,7 +74,6 @@ internal static class ZonePieceCounter
     {
         if (!ZoneLimitConfiguration.Enabled)
         {
-            Clear();
             return;
         }
 
@@ -126,7 +89,6 @@ internal static class ZonePieceCounter
     {
         if (!ZoneLimitConfiguration.Enabled)
         {
-            Clear();
             return;
         }
 
@@ -152,7 +114,6 @@ internal static class ZonePieceCounter
     {
         if (!ZoneLimitConfiguration.Enabled)
         {
-            Clear();
             return;
         }
 
@@ -265,7 +226,7 @@ internal static class ZonePieceCounter
         bool forceCount = ZoneExternalPieceMarkers.ShouldForceCount(zdo);
         bool counted = ShouldCount(zone, playerPlaced, forceCount);
 
-        state = new StructureState(zone, playerPlaced, counted);
+        state = new StructureState(zone, counted);
         return true;
     }
 
@@ -348,28 +309,24 @@ internal static class ZonePieceCounter
 
         public GameObject GameObject { get; }
         public Vector2i Zone { get; private set; }
-        public bool PlayerPlaced { get; private set; }
         public bool Counted { get; private set; }
 
         public void Update(StructureState state)
         {
             Zone = state.Zone;
-            PlayerPlaced = state.PlayerPlaced;
             Counted = state.Counted;
         }
     }
 
     private readonly struct StructureState
     {
-        public StructureState(Vector2i zone, bool playerPlaced, bool counted)
+        public StructureState(Vector2i zone, bool counted)
         {
             Zone = zone;
-            PlayerPlaced = playerPlaced;
             Counted = counted;
         }
 
         public Vector2i Zone { get; }
-        public bool PlayerPlaced { get; }
         public bool Counted { get; }
     }
 }

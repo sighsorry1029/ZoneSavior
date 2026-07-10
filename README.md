@@ -38,14 +38,14 @@ BepInEx/config/
     ZoneBundles/
       tag_name/
         manifest.yml
-        bundle001.zonebundle.yml
+        bundle001_<generation>.zonebundle.yml
 ```
 
 `activity.yml` stores player activity, scan state, and recent scan records. ZoneSavior reloads it conservatively at runtime: broken YAML, dirty runtime state, and active scans are ignored.
 
 `zones.yml` stores zone limits and archive protection rules. Steam IDs are the best long-term protection key; player names are convenient but can change.
 
-`ZoneBundles/<tag>/manifest.yml` records the archive shape. Each `bundleNNN.zonebundle.yml` stores one source zone.
+`ZoneBundles/<tag>/manifest.yml` records the archive shape. Each `bundleNNN_<generation>.zonebundle.yml` stores one source zone. New bundle files are committed by replacing the manifest only after every zone is saved successfully.
 
 `Diagnostics/` contains YAML reports written by `zs_debugzone`.
 

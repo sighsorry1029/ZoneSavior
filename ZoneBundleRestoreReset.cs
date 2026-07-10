@@ -9,24 +9,6 @@ namespace ZoneSavior;
 
 internal static partial class ZoneBundleCommands
 {
-    internal static ZoneBundleCommandResult RestoreTagToOriginalZones(string tag)
-    {
-        ZoneBundleManifest manifest = ZoneBundleStore.LoadManifest(tag);
-        List<LoadWorkItem> work = [];
-        foreach (ZoneBundleManifestEntry entry in manifest.Bundles)
-        {
-            Vector2i sourceZone = ToVector2i(entry.Zone);
-            ZoneBundleFile bundle = ZoneBundleStore.LoadBundleFromManifestEntry(tag, entry);
-            work.Add(new LoadWorkItem(sourceZone, bundle));
-        }
-
-        ZoneLoadTotals totals = ApplyLoadWork(work, exactSource: true, 0f);
-
-        return ZoneBundleCommandResult.Ok(
-            $"Restored {work.Count} archived zone bundle(s) for tag '{tag}' " +
-            $"(removed: {totals.Removed}, created: {totals.Created}, terrain: {totals.TerrainApplied}/{work.Count}).");
-    }
-
     internal static IEnumerator RestoreTagToOriginalZonesAsync(ZoneBundleCommandRequest request, Action<ZoneBundleCommandResult> onComplete, long terrainAssistPeer)
     {
         string tag = request.Tag;
@@ -60,7 +42,7 @@ internal static partial class ZoneBundleCommands
         ZoneLoadTotals totals = default;
         TerrainPreparationResult terrainPreparation = default;
         string restoreError = "";
-        yield return PrepareAndApplyLoadWorkAsync("Zone bundle async archive restore failed", request, work, exactSource: true, 0f, terrainAssistPeer, (loadTotals, preparation, error) =>
+        yield return PrepareAndApplyLoadWorkAsync("Zone bundle async archive restore failed", work, exactSource: true, 0f, terrainAssistPeer, (loadTotals, preparation, error) =>
         {
             totals = loadTotals;
             terrainPreparation = preparation;
@@ -94,38 +76,6 @@ internal static partial class ZoneBundleCommands
         }
 
         throw new InvalidOperationException($"Could not find a free archive tag for '{preferredTag}'.");
-    }
-
-    internal static ZoneBundleResetResult ResetGeneratedZones(IEnumerable<Vector2i> sourceZones)
-    {
-        List<Vector2i> zones = NormalizeZones(sourceZones);
-
-        if (zones.Count == 0)
-        {
-            return new ZoneBundleResetResult
-            {
-                Success = false,
-                Message = "No zones to reset."
-            };
-        }
-
-        HashSet<ZDOID> characterIds = GetOnlineCharacterIds();
-        HashSet<Vector2i> zoneSet = zones.ToHashSet();
-        int removed = ResetZoneObjects(zoneSet, characterIds);
-
-        foreach (Vector2i zone in zones)
-        {
-            ResetZoneSystemState(zone);
-        }
-
-        ResetVerificationResult verification = VerifyResetObjects(zoneSet, characterIds);
-        removed += verification.Removed;
-
-        ClutterSystem.instance?.ClearAll();
-        RecalculateLoadedTerrain();
-        Minimap.instance?.UpdateLocationPins(1000f);
-
-        return BuildResetResult(zones.Count, removed, verification.Removed, verification.RemainingWearNTear);
     }
 
     internal static IEnumerator ResetGeneratedZonesAsync(IEnumerable<Vector2i> sourceZones, Action<ZoneBundleResetResult> onComplete)
@@ -170,19 +120,6 @@ internal static partial class ZoneBundleCommands
         onComplete(BuildResetResult(zones.Count, removed, verification.Removed, verification.RemainingWearNTear));
     }
 
-    private static ResetVerificationResult VerifyResetObjects(HashSet<Vector2i> zoneSet, HashSet<ZDOID> characterIds)
-    {
-        int remainingWearNTear = CountRemainingCreatorWearNTear(zoneSet, characterIds);
-        if (remainingWearNTear <= 0)
-        {
-            return new ResetVerificationResult(0, remainingWearNTear);
-        }
-
-        int verificationRemoved = ResetZoneObjects(zoneSet, characterIds);
-        remainingWearNTear = CountRemainingCreatorWearNTear(zoneSet, characterIds);
-        return new ResetVerificationResult(verificationRemoved, remainingWearNTear);
-    }
-
     private static IEnumerator VerifyResetObjectsAsync(HashSet<Vector2i> zoneSet, HashSet<ZDOID> characterIds, Action<ResetVerificationResult> onComplete)
     {
         int remainingWearNTear = 0;
@@ -222,21 +159,6 @@ internal static partial class ZoneBundleCommands
             RemainingWearNTearCount = remainingWearNTear,
             Message = message
         };
-    }
-
-    private static int ClearTargetZone(Vector2i targetZone)
-    {
-        List<ZDO> objects = new();
-        ZDOMan.instance.FindObjects(targetZone, objects);
-
-        int removed = 0;
-        foreach (ZDO zdo in objects.ToList())
-        {
-            removed += TryDestroyOverwritableZdo(zdo) ? 1 : 0;
-        }
-
-        DataHelper.FlushDestroyed();
-        return removed;
     }
 
     private static IEnumerator ClearTargetZoneAsync(Vector2i targetZone, Action<int> onComplete)
@@ -300,26 +222,6 @@ internal static partial class ZoneBundleCommands
         }
     }
 
-    private static int ResetZoneObjects(HashSet<Vector2i> zones, HashSet<ZDOID> protectedCharacterIds)
-    {
-        List<ZDO> objects = GetResetZoneObjects(zones);
-
-        int removed = 0;
-        foreach (ZDO zdo in objects)
-        {
-            if (!IsResettableZoneObject(zdo, zones, protectedCharacterIds))
-            {
-                continue;
-            }
-
-            DataHelper.Destroy(zdo);
-            removed++;
-        }
-
-        DataHelper.FlushDestroyed();
-        return removed;
-    }
-
     private static IEnumerator ResetZoneObjectsAsync(HashSet<Vector2i> zones, HashSet<ZDOID> protectedCharacterIds, Action<int> onComplete)
     {
         HashSet<ZDOID> seen = [];
@@ -357,29 +259,6 @@ internal static partial class ZoneBundleCommands
         onComplete(removed);
     }
 
-    private static int CountRemainingCreatorWearNTear(HashSet<Vector2i> zones, HashSet<ZDOID> protectedCharacterIds)
-    {
-        List<ZDO> objects = GetResetZoneObjects(zones);
-
-        int count = 0;
-        foreach (ZDO zdo in objects)
-        {
-            if (!IsResettableZoneObject(zdo, zones, protectedCharacterIds))
-            {
-                continue;
-            }
-
-            if (!IsCreatorWearNTear(zdo))
-            {
-                continue;
-            }
-
-            count++;
-        }
-
-        return count;
-    }
-
     private static IEnumerator CountRemainingCreatorWearNTearAsync(HashSet<Vector2i> zones, HashSet<ZDOID> protectedCharacterIds, Action<int> onComplete)
     {
         HashSet<ZDOID> seen = [];
@@ -411,29 +290,6 @@ internal static partial class ZoneBundleCommands
         }
 
         onComplete(count);
-    }
-
-    private static List<ZDO> GetResetZoneObjects(HashSet<Vector2i> zones)
-    {
-        List<ZDO> objects = [];
-        HashSet<ZDOID> seen = [];
-        List<ZDO> zoneObjects = [];
-        foreach (Vector2i zone in zones)
-        {
-            zoneObjects.Clear();
-            ZDOMan.instance.FindObjects(zone, zoneObjects);
-            foreach (ZDO zdo in zoneObjects)
-            {
-                if (!TryCollectResetZoneObject(zdo, zones, seen, out ZDO resetObject))
-                {
-                    continue;
-                }
-
-                objects.Add(resetObject);
-            }
-        }
-
-        return objects;
     }
 
     private static bool TryCollectResetZoneObject(ZDO zdo, HashSet<Vector2i> zones, HashSet<ZDOID> seen, out ZDO resetObject)
@@ -492,14 +348,6 @@ internal static partial class ZoneBundleCommands
         }
 
         return ids;
-    }
-
-    private static void RecalculateLoadedTerrain()
-    {
-        foreach (Heightmap heightmap in GetLoadedHeightmapSnapshot())
-        {
-            RecalculateHeightmap(heightmap);
-        }
     }
 
     private static IEnumerator RecalculateLoadedTerrainAsync()

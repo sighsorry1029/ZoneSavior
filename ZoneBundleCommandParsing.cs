@@ -273,11 +273,6 @@ internal static partial class ZoneBundleCommands
         return ZNet.instance.GetWorldName();
     }
 
-    internal static string GetCurrentWorldName()
-    {
-        return GetWorldName();
-    }
-
     private static ZoneBundleZone ToModel(Vector2i zone)
     {
         return ZoneSaviorZones.ToModel(zone);

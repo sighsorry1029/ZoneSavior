@@ -44,9 +44,4 @@ internal static class ZoneSaviorTimestamp
         return DateTime.MinValue;
     }
 
-    public static bool IsExpired(string timestamp, DateTime utcNow)
-    {
-        DateTime utc = ParseUtc(timestamp);
-        return utc != DateTime.MinValue && utc <= DateTime.SpecifyKind(utcNow, DateTimeKind.Utc);
-    }
 }

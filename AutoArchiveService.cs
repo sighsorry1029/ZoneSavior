@@ -17,6 +17,7 @@ internal static class AutoArchiveService
     private static DateTime _lastTrackUtc = DateTime.MinValue;
     private static DateTime _lastFlushUtc = DateTime.MinValue;
     private static Coroutine? _scanCoroutine;
+    private static int _scanOperationToken;
 
     public static bool IsScanRunning => _scanRunning;
 
@@ -65,7 +66,7 @@ internal static class AutoArchiveService
             return;
         }
 
-        QueueScan(new AutoArchiveScanOptions
+        _ = QueueScan(new AutoArchiveScanOptions
         {
             Manual = false,
             DryRun = AutoArchiveConfig.DryRun,
@@ -80,14 +81,13 @@ internal static class AutoArchiveService
             return false;
         }
 
-        QueueScan(new AutoArchiveScanOptions
+        return QueueScan(new AutoArchiveScanOptions
         {
             Manual = true,
             DryRun = dryRunOverride ?? AutoArchiveConfig.DryRun,
             ResetAfterSave = resetAfterSaveOverride ?? AutoArchiveConfig.ResetAfterSave,
             TargetPlayerIds = targetPlayerIds == null ? [] : new List<long>(targetPlayerIds)
         });
-        return true;
     }
 
     public static void Shutdown()
@@ -98,32 +98,52 @@ internal static class AutoArchiveService
             _scanCoroutine = null;
         }
 
+        ZoneBundleCommands.EndOperation(_scanOperationToken);
+        _scanOperationToken = 0;
         _scanRunning = false;
     }
 
-    private static void QueueScan(AutoArchiveScanOptions options)
+    private static bool QueueScan(AutoArchiveScanOptions options)
     {
+        if (!ZoneBundleCommands.TryBeginOperation("auto archive scan", out int operationToken, out _))
+        {
+            return false;
+        }
+
+        _scanOperationToken = operationToken;
         _scanRunning = true;
         _logger.LogInfo(
             $"Starting auto archive scan (manual: {options.Manual}, dry run: {options.DryRun}, reset: {options.ResetAfterSave}, targets: {options.TargetPlayerIds.Count}).");
-        _scanCoroutine = ZoneSaviorPlugin.Instance.StartCoroutine(RunScan(options));
+        _scanCoroutine = ZoneSaviorPlugin.Instance.StartCoroutine(RunScan(options, operationToken));
+        return true;
     }
 
-    private static IEnumerator RunScan(AutoArchiveScanOptions options)
+    private static IEnumerator RunScan(AutoArchiveScanOptions options, int operationToken)
     {
         ArchiveRunRecord? completed = null;
-        yield return AutoArchiveScanner.Run(options, run => completed = run);
-
-        if (completed != null)
+        try
         {
-            AutoArchiveStore.RecordRun(completed);
-            AutoArchiveStore.Flush(force: true);
-            _logger.LogInfo(
-                $"Auto archive scan finished: {completed.CandidateZones} candidate zone(s), {completed.ProcessedZones} processed zone(s), {completed.Clusters.Count} cluster record(s).");
-        }
+            yield return AutoArchiveScanner.Run(options, run => completed = run);
 
-        _scanRunning = false;
-        _scanCoroutine = null;
+            if (completed != null)
+            {
+                AutoArchiveStore.RecordRun(completed);
+                AutoArchiveStore.Flush(force: true);
+                _logger.LogInfo(
+                    $"Auto archive scan finished: {completed.CandidateZones} candidate zone(s), {completed.ProcessedZones} processed zone(s), {completed.Clusters.Count} cluster record(s).");
+            }
+        }
+        finally
+        {
+            ZoneBundleCommands.EndOperation(operationToken);
+            if (_scanOperationToken == operationToken)
+            {
+                _scanOperationToken = 0;
+            }
+
+            _scanRunning = false;
+            _scanCoroutine = null;
+        }
     }
 
     private static bool IsServerReady()

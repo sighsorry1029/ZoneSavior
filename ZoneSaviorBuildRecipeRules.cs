@@ -7,8 +7,20 @@ namespace ZoneSavior;
 
 internal static class ZoneSaviorBuildRecipeRules
 {
-    private static readonly Dictionary<string, bool> BuildRecipeCache = new(StringComparer.Ordinal);
-    private static int _buildRecipeCacheObjectDbCount = -1;
+    private static readonly HashSet<string> BuildRecipePrefabs = new(StringComparer.Ordinal);
+    private static ObjectDB? _indexedObjectDb;
+    private static int _indexedItemCount = -1;
+
+    internal static void RefreshIndex()
+    {
+        BuildRecipePrefabs.Clear();
+        _indexedObjectDb = null;
+        _indexedItemCount = -1;
+        if (ObjectDB.instance != null && ObjectDB.instance.m_items != null)
+        {
+            EnsureIndex(ObjectDB.instance);
+        }
+    }
 
     internal static bool HasBuildRecipe(GameObject? prefab)
     {
@@ -45,17 +57,18 @@ internal static class ZoneSaviorBuildRecipeRules
             return false;
         }
 
-        if (_buildRecipeCacheObjectDbCount != objectDb.m_items.Count)
+        EnsureIndex(objectDb);
+        return BuildRecipePrefabs.Contains(prefabName);
+    }
+
+    private static void EnsureIndex(ObjectDB objectDb)
+    {
+        if (ReferenceEquals(_indexedObjectDb, objectDb) && _indexedItemCount == objectDb.m_items.Count)
         {
-            BuildRecipeCache.Clear();
-            _buildRecipeCacheObjectDbCount = objectDb.m_items.Count;
+            return;
         }
 
-        if (BuildRecipeCache.TryGetValue(prefabName, out bool cached))
-        {
-            return cached;
-        }
-
+        BuildRecipePrefabs.Clear();
         foreach (GameObject itemPrefab in objectDb.m_items)
         {
             ItemDrop itemDrop = itemPrefab ? itemPrefab.GetComponent<ItemDrop>() : null!;
@@ -65,16 +78,22 @@ internal static class ZoneSaviorBuildRecipeRules
                 continue;
             }
 
-            if (pieceTable.m_pieces.Any(piecePrefab =>
-                    piecePrefab &&
-                    string.Equals(Utils.GetPrefabName(piecePrefab), prefabName, StringComparison.Ordinal)))
+            foreach (GameObject piecePrefab in pieceTable.m_pieces)
             {
-                BuildRecipeCache[prefabName] = true;
-                return true;
+                if (!piecePrefab)
+                {
+                    continue;
+                }
+
+                string name = Utils.GetPrefabName(piecePrefab);
+                if (!string.IsNullOrWhiteSpace(name))
+                {
+                    BuildRecipePrefabs.Add(name);
+                }
             }
         }
 
-        BuildRecipeCache[prefabName] = false;
-        return false;
+        _indexedObjectDb = objectDb;
+        _indexedItemCount = objectDb.m_items.Count;
     }
 }

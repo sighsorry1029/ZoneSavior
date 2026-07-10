@@ -128,18 +128,6 @@ internal static partial class ZoneBundleTerrain
             : (offsets[middle - 1] + offsets[middle]) * 0.5f;
     }
 
-    private static TerrainSupportStrategy SelectPlacementStrategy(TerrainSupportTarget target)
-    {
-        return target.ContactsCaptured && target.Contacts.Count > 0
-            ? SavedContactStrategy
-            : ColliderFallbackStrategy;
-    }
-
-    private static TerrainSupportStrategy SelectApplyStrategy(bool hasContacts)
-    {
-        return hasContacts ? SavedContactStrategy : ColliderFallbackStrategy;
-    }
-
     private static List<TerrainSupportSample> CollectSavedContactSamples(Vector2i zone, IEnumerable<ZoneBundleTerrainContact> contacts)
     {
         Vector3 zoneCenter = ZoneSystem.GetZonePos(zone);
@@ -461,89 +449,15 @@ internal static partial class ZoneBundleTerrain
         return zdo.GetVec3(ZDOVars.s_scaleHash, prefab.transform.localScale);
     }
 
-    private abstract class TerrainSupportStrategy
-    {
-        public abstract List<TerrainSupportSample> CollectPlacementSamples(TerrainSupportTarget target);
-
-        public abstract List<TerrainSupportSample> CollectApplySamples(
-            Vector2i zone,
-            IEnumerable<ZoneBundleEntry> entries,
-            IReadOnlyCollection<ZoneBundleTerrainContact> contacts);
-
-        public abstract float ResolveBaseWorldY(List<TerrainSupportSample> footprintSamples);
-
-        public virtual bool IsPlacementTargetUsable(TerrainSupportSample sample, float baseWorldY)
-        {
-            return true;
-        }
-
-        public virtual bool IsApplyTargetUsable(TerrainSupportSample sample, float targetHeight)
-        {
-            return true;
-        }
-    }
-
-    private sealed class SavedContactTerrainStrategy : TerrainSupportStrategy
-    {
-        public override List<TerrainSupportSample> CollectPlacementSamples(TerrainSupportTarget target)
-        {
-            return CollectSavedContactSamples(target.Zone, target.Contacts);
-        }
-
-        public override List<TerrainSupportSample> CollectApplySamples(
-            Vector2i zone,
-            IEnumerable<ZoneBundleEntry> entries,
-            IReadOnlyCollection<ZoneBundleTerrainContact> contacts)
-        {
-            return CollectSavedContactSamples(zone, contacts);
-        }
-
-        public override float ResolveBaseWorldY(List<TerrainSupportSample> footprintSamples)
-        {
-            return ResolveSupportFillBaseWorldY(footprintSamples);
-        }
-    }
-
-    private sealed class ColliderFallbackTerrainStrategy : TerrainSupportStrategy
-    {
-        public override List<TerrainSupportSample> CollectPlacementSamples(TerrainSupportTarget target)
-        {
-            return CollectSupportSamples(target.Zone, target.Entries, target.SourceBaseY);
-        }
-
-        public override List<TerrainSupportSample> CollectApplySamples(
-            Vector2i zone,
-            IEnumerable<ZoneBundleEntry> entries,
-            IReadOnlyCollection<ZoneBundleTerrainContact> contacts)
-        {
-            return CollectSupportSamples(zone, entries);
-        }
-
-        public override float ResolveBaseWorldY(List<TerrainSupportSample> footprintSamples)
-        {
-            return ResolveFallbackSupportBaseWorldY(footprintSamples);
-        }
-
-        public override bool IsPlacementTargetUsable(TerrainSupportSample sample, float baseWorldY)
-        {
-            return IsReasonableFallbackSupportTarget(sample, baseWorldY);
-        }
-
-        public override bool IsApplyTargetUsable(TerrainSupportSample sample, float targetHeight)
-        {
-            return IsReasonableFallbackTarget(sample.WorldX, sample.WorldZ, targetHeight);
-        }
-    }
-
     private readonly struct PlacementSupportSampleSet
     {
-        public PlacementSupportSampleSet(TerrainSupportStrategy strategy, List<TerrainSupportSample> samples)
+        public PlacementSupportSampleSet(bool usesSavedContacts, List<TerrainSupportSample> samples)
         {
-            Strategy = strategy;
+            UsesSavedContacts = usesSavedContacts;
             Samples = samples;
         }
 
-        public TerrainSupportStrategy Strategy { get; }
+        public bool UsesSavedContacts { get; }
         public List<TerrainSupportSample> Samples { get; }
     }
 

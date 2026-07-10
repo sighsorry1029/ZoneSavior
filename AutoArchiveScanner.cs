@@ -49,6 +49,7 @@ internal static class AutoArchiveScanner
             yield break;
         }
 
+        ZoneSaviorBuildRecipeRules.RefreshIndex();
         PlayerActivityTracker.TrackOnlinePlayers(utcNow);
 
         Dictionary<Vector2i, AutoArchiveZoneInfo> zoneInfos = [];
@@ -103,7 +104,18 @@ internal static class AutoArchiveScanner
                     continue;
                 }
 
-                ZoneBundleResetResult resetOnlyResult = ZoneBundleCommands.ResetGeneratedZones(cluster);
+                ZoneBundleResetResult? resetOnlyResult = null;
+                yield return ZoneBundleCommands.ResetGeneratedZonesAsync(cluster, result => resetOnlyResult = result);
+                if (resetOnlyResult == null)
+                {
+                    record.Status = "reset-without-save-failed";
+                    record.Reason = "reset failed: reset coroutine did not return a result";
+                    run.Clusters.Add(record);
+                    _logger.LogError("Auto archive small-cluster reset failed: reset coroutine did not return a result.");
+                    yield return null;
+                    continue;
+                }
+
                 record.Status = resetOnlyResult.Success ? "reset-without-save" : "reset-without-save-failed";
                 record.Reason = resetOnlyResult.Message;
 
@@ -180,14 +192,16 @@ internal static class AutoArchiveScanner
         zone = default;
         creator = 0L;
 
-        if (!ZoneStructureClassifier.TryInspectAutoArchiveCandidate(zdo, out ZoneStructureInfo info))
+        if (!ZoneStructureClassifier.TryGetAutoArchiveCandidate(
+                zdo,
+                out zone,
+                out creator,
+                out string creatorName))
         {
             return false;
         }
 
-        creator = info.CreatorPlayerId;
-        AutoArchiveStore.RecordUnknownPlayer(creator, utcNow, info.CreatorName);
-        zone = info.ObjectZone;
+        AutoArchiveStore.RecordUnknownPlayer(creator, utcNow, creatorName);
 
         return true;
     }
@@ -523,11 +537,6 @@ internal static class AutoArchiveScanner
                ZDOMan.instance != null &&
                ZNetScene.instance != null &&
                ZoneSystem.instance != null;
-    }
-
-    private static string FormatDate(DateTime value)
-    {
-        return value == DateTime.MinValue ? "-" : value.ToString("O", CultureInfo.InvariantCulture);
     }
 
     private sealed class AutoArchiveZoneInfo

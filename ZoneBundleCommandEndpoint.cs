@@ -102,7 +102,7 @@ internal static class ZoneBundleCommandEndpoint
 
     private static void RPC_HandleResult(long sender, ZPackage package)
     {
-        if (ZNet.instance && ZNet.instance.IsServer())
+        if (!ZoneRpcRegistrar.IsServerSender(sender))
         {
             return;
         }

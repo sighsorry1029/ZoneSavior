@@ -10,21 +10,16 @@ internal sealed class ZoneBundleZdoData
 {
     private const string Prefix = "zs-zdo-v1:";
     private const int Version = 1;
+    private const int MaxDictionaryEntries = 100000;
 
     public Dictionary<int, string> Strings { get; private set; } = [];
     public Dictionary<int, float> Floats { get; private set; } = [];
     public Dictionary<int, int> Ints { get; private set; } = [];
-    public Dictionary<int, bool> Bools { get; private set; } = [];
-    public Dictionary<int, int> Hashes { get; private set; } = [];
     public Dictionary<int, long> Longs { get; private set; } = [];
     public Dictionary<int, Vector3> Vecs { get; private set; } = [];
     public Dictionary<int, Quaternion> Quats { get; private set; } = [];
     public Dictionary<int, byte[]> ByteArrays { get; private set; } = [];
 
-    public ZDOID OriginalId { get; set; } = ZDOID.None;
-    public ZDOID TargetConnectionId { get; set; } = ZDOID.None;
-    public int ConnectionHash { get; set; }
-    public ZDOExtraData.ConnectionType ConnectionType { get; set; } = ZDOExtraData.ConnectionType.None;
     public bool Persistent { get; private set; }
     public bool Distant { get; private set; }
     public ZDO.ObjectType ObjectType { get; private set; }
@@ -43,7 +38,7 @@ internal sealed class ZoneBundleZdoData
         Load(payload);
     }
 
-    public string GetBase64(Dictionary<string, string> _)
+    public string GetBase64()
     {
         ZPackage package = new();
         package.Write(Version);
@@ -83,16 +78,6 @@ internal sealed class ZoneBundleZdoData
             zdo.Set(item.Key, item.Value);
         }
 
-        foreach (KeyValuePair<int, bool> item in Bools)
-        {
-            zdo.Set(item.Key, item.Value);
-        }
-
-        foreach (KeyValuePair<int, int> item in Hashes)
-        {
-            zdo.Set(item.Key, item.Value);
-        }
-
         foreach (KeyValuePair<int, long> item in Longs)
         {
             zdo.Set(item.Key, item.Value);
@@ -116,7 +101,6 @@ internal sealed class ZoneBundleZdoData
 
     private void Load(ZDO zdo)
     {
-        OriginalId = zdo.m_uid;
         Persistent = zdo.Persistent;
         Distant = zdo.Distant;
         ObjectType = zdo.Type;
@@ -170,6 +154,11 @@ internal sealed class ZoneBundleZdoData
     private static Dictionary<int, T> ReadDictionary<T>(ZPackage package, Func<T> readValue)
     {
         int count = package.ReadInt();
+        if (count < 0 || count > MaxDictionaryEntries)
+        {
+            throw new InvalidDataException($"Zone bundle ZDO dictionary count {count} is invalid.");
+        }
+
         Dictionary<int, T> values = new(count);
         for (int i = 0; i < count; i++)
         {
@@ -183,7 +172,7 @@ internal sealed class ZoneBundleZdoData
 
 internal static class ZoneBundleZdoHelper
 {
-    public static ZDO? Init(GameObject prefab, Vector3 position, Quaternion rotation, Vector3? scale, ZoneBundleZdoData data, Dictionary<string, string> _)
+    public static ZDO? Init(GameObject prefab, Vector3 position, Quaternion rotation, Vector3? scale, ZoneBundleZdoData data)
     {
         if (ZDOMan.instance == null || !prefab)
         {

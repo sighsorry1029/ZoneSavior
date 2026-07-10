@@ -1,10 +1,13 @@
 using System.Collections.Generic;
+using YamlDotNet.Serialization;
 
 namespace ZoneSavior;
 
 internal sealed class ZoneBundleManifest
 {
-    public int Version { get; set; } = 1;
+    public const int CurrentVersion = 1;
+
+    public int Version { get; set; } = CurrentVersion;
     public string Tag { get; set; } = "";
     public string World { get; set; } = "";
     public string SavedAt { get; set; } = "";
@@ -29,23 +32,17 @@ internal sealed class ZoneBundleCreatorPlayer
 
 internal sealed class ZoneBundleFile
 {
-    public int Version { get; set; } = 1;
+    public const int CurrentVersion = 2;
+
+    public int Version { get; set; } = CurrentVersion;
     public string Tag { get; set; } = "";
-    public ZoneBundleZone SourceZone { get; set; } = new();
-    public string TerrainMode { get; set; } = "";
     public float SourceBaseY { get; set; }
-    public ZoneBundleTerrainCaptureState TerrainCaptureState { get; set; } = ZoneBundleTerrainCaptureState.NotLoaded;
     public bool TerrainContactsCaptured { get; set; }
     public List<ZoneBundleTerrainContact> TerrainContacts { get; set; } = [];
+
+    [YamlIgnore]
     public List<ZoneBundleCreatorPlayer> SourceZoneCreators { get; set; } = new();
     public List<ZoneBundleEntry> Entries { get; set; } = new();
-}
-
-internal enum ZoneBundleTerrainCaptureState
-{
-    NotLoaded = 0,
-    LoadedNoContacts = 1,
-    Contacts = 2
 }
 
 internal sealed class ZoneBundleTerrainContact
@@ -57,16 +54,14 @@ internal sealed class ZoneBundleTerrainContact
 
 internal sealed class ZoneBundleEntry
 {
-    public string SaveId { get; set; } = "";
-    public string Kind { get; set; } = "";
     public string Prefab { get; set; } = "";
     public float[] LocalPos { get; set; } = new float[3];
     public float[] Rot { get; set; } = new float[4];
     public float[] Scale { get; set; } = new float[3];
-    public long CreatorPlayerId { get; set; }
-    public string? CreatorName { get; set; }
     public string Data { get; set; } = "";
-    public string Sanitize { get; set; } = "";
+
+    [YamlIgnore]
+    public ZoneBundleZdoData? RuntimeData { get; set; }
 }
 
 internal sealed class ZoneBundleRange
@@ -136,8 +131,6 @@ internal sealed class TerrainPlacementContext
 internal sealed class ZoneBundleClientTerrainApplyRequest
 {
     public string RequestId { get; set; } = "";
-    public string Operation { get; set; } = "";
-    public string Tag { get; set; } = "";
     public TerrainPlacementContext? Context { get; set; }
     public List<ZoneBundleZone> TargetZones { get; set; } = [];
     public List<ZoneBundleClientTerrainApplyTarget> Targets { get; set; } = [];
@@ -156,14 +149,11 @@ internal sealed class ZoneBundleClientTerrainApplyResponse
     public string RequestId { get; set; } = "";
     public bool Success { get; set; }
     public string Message { get; set; } = "";
-    public int TargetZones { get; set; }
-    public int ChangedZones { get; set; }
 }
 
 internal sealed class ZoneBundleClientTerrainCaptureRequest
 {
     public string RequestId { get; set; } = "";
-    public string Tag { get; set; } = "";
     public ZoneBundleZone Zone { get; set; } = new();
     public float SourceBaseY { get; set; }
     public List<ZoneBundleEntry> Entries { get; set; } = [];
@@ -174,7 +164,6 @@ internal sealed class ZoneBundleClientTerrainCaptureResponse
     public string RequestId { get; set; } = "";
     public bool Success { get; set; }
     public string Message { get; set; } = "";
-    public bool ContactsCaptured { get; set; }
     public List<ZoneBundleTerrainContact> Contacts { get; set; } = [];
 }
 

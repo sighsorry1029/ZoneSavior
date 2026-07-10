@@ -1,5 +1,9 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
+using System.Reflection.Emit;
+using HarmonyLib;
 using UnityEngine;
 
 namespace ZoneSavior;
@@ -577,5 +581,36 @@ internal static partial class AdminTerrainTool
                Mathf.Abs(a.g - b.g) < 0.001f &&
                Mathf.Abs(a.b - b.b) < 0.001f &&
                Mathf.Abs(a.a - b.a) < 0.001f;
+    }
+}
+
+[HarmonyPatch(typeof(TerrainComp), nameof(TerrainComp.ApplyToHeightmap))]
+internal static class AdminTerrainToolTerrainCompPatch
+{
+    private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+    {
+        MethodInfo limit = AccessTools.Method(typeof(AdminTerrainTool), nameof(AdminTerrainTool.GetTerrainCompHeightClampLimit));
+        if (limit == null)
+        {
+            return instructions;
+        }
+
+        return ReplaceVanillaTerrainCompClamp(instructions, limit);
+    }
+
+    private static IEnumerable<CodeInstruction> ReplaceVanillaTerrainCompClamp(IEnumerable<CodeInstruction> instructions, MethodInfo limit)
+    {
+        foreach (CodeInstruction instruction in instructions)
+        {
+            if (instruction.opcode == OpCodes.Ldc_R4 &&
+                instruction.operand is float value &&
+                Math.Abs(value - 8f) < 0.001f)
+            {
+                instruction.opcode = OpCodes.Call;
+                instruction.operand = limit;
+            }
+
+            yield return instruction;
+        }
     }
 }

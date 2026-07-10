@@ -25,12 +25,17 @@ internal static class ZoneBundleSupportGrace
 
     public static void RegisterRpcs()
     {
-        RpcRegistrar.EnsureRegistered(rpc =>
+        bool registered = RpcRegistrar.EnsureRegistered(rpc =>
         {
             rpc.Register<ZPackage>(SyncRpcName, ReceiveGraceSync);
             rpc.Register(SnapshotRequestRpcName, ReceiveSnapshotRequest);
-            _requestedSnapshotServer = 0L;
         });
+
+        if (registered)
+        {
+            GraceUntilUtc.Clear();
+            _requestedSnapshotServer = 0L;
+        }
     }
 
     public static void Update()
@@ -151,10 +156,7 @@ internal static class ZoneBundleSupportGrace
 
     private static void ReceiveGraceSync(long sender, ZPackage package)
     {
-        if (ZNet.instance != null &&
-            !ZNet.instance.IsServer() &&
-            ZRoutedRpc.instance != null &&
-            sender != ZRoutedRpc.instance.GetServerPeerID())
+        if (!ZoneRpcRegistrar.IsServerSender(sender))
         {
             return;
         }

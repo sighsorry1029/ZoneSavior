@@ -20,7 +20,6 @@ internal static class ZoneSaviorFeatureBootstrap
 
     public static void InitializeCompat(ManualLogSource logger, Harmony harmony)
     {
-        ZoneWorldEditTerrainCompat.Initialize(logger, harmony);
         ZoneSaviorExpandWorldDataCompat.Initialize(logger, harmony);
         AdminTerrainTool.InitializeCompat(harmony);
         VeiledRecipesCompat.Initialize(logger);
@@ -31,7 +30,6 @@ internal static class ZoneSaviorFeatureBootstrap
         ZoneBundleCommands.RegisterRpcs();
         ZoneBundleSupportGrace.Update();
         AutoArchiveCommands.RegisterRpcs();
-        ZoneWorldEditTerrainCompat.Update();
         AutoArchiveService.Update();
         ZoneBoundaryOverlay.Update();
         AdminTerrainTool.Update();

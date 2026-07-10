@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Text;
 
 namespace ZoneSavior;
 
@@ -52,17 +53,29 @@ internal static class ZoneSaviorSteamIds
 
 internal static class ZoneSaviorPaths
 {
+    private const int MaxPathSegmentLength = 96;
+
     public static string SanitizePathSegment(string value)
     {
-        char[] invalidChars = Path.GetInvalidFileNameChars();
-        string sanitized = new(value.Select(character => invalidChars.Contains(character) ? '_' : character).ToArray());
-        sanitized = sanitized.Trim();
-        if (sanitized.Length == 0)
+        string segment = value?.Trim() ?? "";
+        if (segment.Length == 0)
         {
             throw new InvalidOperationException("Tag or world name resolves to an empty path segment.");
         }
 
-        return sanitized;
+        if (segment.Length > MaxPathSegmentLength)
+        {
+            throw new InvalidOperationException($"Tag or world name exceeds {MaxPathSegmentLength} characters.");
+        }
+
+        if (segment is "." or ".." ||
+            segment.EndsWith(".", StringComparison.Ordinal) ||
+            segment.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        {
+            throw new InvalidOperationException($"Tag or world name '{value}' is not a safe file name.");
+        }
+
+        return segment;
     }
 
     public static string SanitizeTagToken(string value, int maxLength = 32)
@@ -97,6 +110,48 @@ internal static class ZoneSaviorPaths
         }
 
         return string.IsNullOrWhiteSpace(sanitized) ? "unknown" : sanitized;
+    }
+}
+
+internal static class ZoneSaviorFiles
+{
+    private static readonly Encoding DefaultEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+
+    public static void WriteAllTextAtomic(string path, string contents, Encoding? encoding = null)
+    {
+        string fullPath = Path.GetFullPath(path);
+        string directory = Path.GetDirectoryName(fullPath)!;
+        Directory.CreateDirectory(directory);
+
+        string temporaryPath = Path.Combine(
+            directory,
+            $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            using (FileStream stream = new(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            using (StreamWriter writer = new(stream, encoding ?? DefaultEncoding))
+            {
+                writer.Write(contents);
+                writer.Flush();
+                stream.Flush(flushToDisk: true);
+            }
+
+            if (File.Exists(fullPath))
+            {
+                File.Replace(temporaryPath, fullPath, destinationBackupFileName: null, ignoreMetadataErrors: true);
+            }
+            else
+            {
+                File.Move(temporaryPath, fullPath);
+            }
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath))
+            {
+                File.Delete(temporaryPath);
+            }
+        }
     }
 }
 

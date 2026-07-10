@@ -1,8 +1,5 @@
 using System;
 using System.Collections;
-using System.Collections.Generic;
-using System.Reflection;
-using System.Reflection.Emit;
 using BepInEx.Logging;
 using HarmonyLib;
 using UnityEngine;
@@ -714,116 +711,6 @@ internal sealed class ZoneSaviorTerrainProxy : MonoBehaviour, IPlaced
         if (nview)
         {
             AdminTerrainTool.DestroyProxy(nview);
-        }
-    }
-}
-
-[HarmonyPatch(typeof(ZNetScene), nameof(ZNetScene.Awake))]
-internal static class AdminTerrainToolScenePatch
-{
-    private static void Postfix()
-    {
-        AdminTerrainTool.Update();
-    }
-}
-
-[HarmonyPatch(typeof(ZNetScene), "CreateObject")]
-internal static class AdminTerrainToolCreateObjectPatch
-{
-    private static bool Prefix(ZDO zdo, ref GameObject __result)
-    {
-        return !AdminTerrainTool.TryCreateLoadedProxy(zdo, ref __result);
-    }
-}
-
-[HarmonyPatch(typeof(PieceTable), nameof(PieceTable.UpdateAvailable))]
-internal static class AdminTerrainToolPieceTablePatch
-{
-    private static void Postfix(PieceTable __instance, Player player)
-    {
-        AdminTerrainTool.AddToAvailablePieces(__instance, player);
-    }
-}
-
-[HarmonyPatch(typeof(Player), nameof(Player.UpdateKnownRecipesList))]
-internal static class AdminTerrainToolKnownRecipesPatch
-{
-    [HarmonyPriority(Priority.First)]
-    private static void Prefix(Player __instance)
-    {
-        AdminTerrainTool.SanitizeKnownRecipePieceTables(__instance);
-    }
-}
-
-[HarmonyPatch(typeof(Player), "UpdatePlacementGhost")]
-internal static class AdminTerrainToolPlacementGhostPatch
-{
-    [HarmonyPriority(Priority.Last)]
-    private static void Postfix(Player __instance)
-    {
-        AdminTerrainTool.PreparePlacementGhost(__instance);
-    }
-}
-
-[HarmonyPatch(typeof(Player), nameof(Player.UpdatePlacement))]
-internal static class AdminTerrainToolPlacementWheelPatch
-{
-    private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
-    {
-        MethodInfo original = AccessTools.Method(typeof(ZInput), nameof(ZInput.GetMouseScrollWheel));
-        MethodInfo replacement = AccessTools.Method(typeof(AdminTerrainTool), nameof(AdminTerrainTool.GetPlacementMouseScrollWheel));
-        if (original == null || replacement == null)
-        {
-            return instructions;
-        }
-
-        return ReplaceMouseScrollWheel(instructions, original, replacement);
-    }
-
-    private static IEnumerable<CodeInstruction> ReplaceMouseScrollWheel(
-        IEnumerable<CodeInstruction> instructions,
-        MethodInfo original,
-        MethodInfo replacement)
-    {
-        foreach (CodeInstruction instruction in instructions)
-        {
-            if (instruction.Calls(original))
-            {
-                instruction.operand = replacement;
-            }
-
-            yield return instruction;
-        }
-    }
-}
-
-[HarmonyPatch(typeof(TerrainComp), nameof(TerrainComp.ApplyToHeightmap))]
-internal static class AdminTerrainToolTerrainCompPatch
-{
-    private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
-    {
-        MethodInfo limit = AccessTools.Method(typeof(AdminTerrainTool), nameof(AdminTerrainTool.GetTerrainCompHeightClampLimit));
-        if (limit == null)
-        {
-            return instructions;
-        }
-
-        return ReplaceVanillaTerrainCompClamp(instructions, limit);
-    }
-
-    private static IEnumerable<CodeInstruction> ReplaceVanillaTerrainCompClamp(IEnumerable<CodeInstruction> instructions, MethodInfo limit)
-    {
-        foreach (CodeInstruction instruction in instructions)
-        {
-            if (instruction.opcode == OpCodes.Ldc_R4 &&
-                instruction.operand is float value &&
-                Math.Abs(value - 8f) < 0.001f)
-            {
-                instruction.opcode = OpCodes.Call;
-                instruction.operand = limit;
-            }
-
-            yield return instruction;
         }
     }
 }

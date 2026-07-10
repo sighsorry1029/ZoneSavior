@@ -121,22 +121,6 @@ internal static partial class AdminTerrainTool
         return false;
     }
 
-    private static void DrawAreaLine(Vector3 center, Quaternion rotation, float width, float length)
-    {
-        EnsureAreaLine();
-        if (!_areaLine)
-        {
-            return;
-        }
-
-        _areaLine.enabled = true;
-        Color color = AreaColor();
-        _areaLine.startColor = color;
-        _areaLine.endColor = color;
-
-        DrawRectangleLine(center, rotation, width * 0.5f, length * 0.5f);
-    }
-
     private static void DrawCircleLine(Vector3 center, Quaternion rotation, float radius)
     {
         EnsureAreaLine();
@@ -158,16 +142,6 @@ internal static partial class AdminTerrainTool
             Vector3 point = center + rotation * new Vector3(Mathf.Cos(angle) * radius, 0f, Mathf.Sin(angle) * radius);
             _areaLine.SetPosition(i, point);
         }
-    }
-
-    private static void DrawRectangleLine(Vector3 center, Quaternion rotation, float halfX, float halfZ)
-    {
-        _areaLine!.positionCount = 5;
-        _areaLine.SetPosition(0, center + rotation * new Vector3(-halfX, 0f, -halfZ));
-        _areaLine.SetPosition(1, center + rotation * new Vector3(-halfX, 0f, halfZ));
-        _areaLine.SetPosition(2, center + rotation * new Vector3(halfX, 0f, halfZ));
-        _areaLine.SetPosition(3, center + rotation * new Vector3(halfX, 0f, -halfZ));
-        _areaLine.SetPosition(4, center + rotation * new Vector3(-halfX, 0f, -halfZ));
     }
 
     private static void DrawWidthLine(Vector3 center, Quaternion rotation, float width)

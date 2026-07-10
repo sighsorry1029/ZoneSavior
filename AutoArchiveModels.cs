@@ -6,7 +6,9 @@ namespace ZoneSavior;
 
 internal sealed class AutoArchiveState
 {
-    public int Version { get; set; } = 1;
+    public const int CurrentVersion = 1;
+
+    public int Version { get; set; } = CurrentVersion;
 
     [YamlIgnore]
     public DateTime LastScanUtc { get; set; } = DateTime.MinValue;

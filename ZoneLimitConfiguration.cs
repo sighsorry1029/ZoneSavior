@@ -24,7 +24,6 @@ internal static class ZoneLimitConfiguration
     private static ManualLogSource? _logger;
     private static CustomSyncedValue<string>? _syncedYaml;
 
-    public static IReadOnlyList<ZoneLimitRule> ActiveRules => Rules;
     public static bool Enabled => GeneralConfig.ZoneWearNTearLimitEnabled;
 
     public static void Initialize(ConfigSync configSync, ManualLogSource logger)
@@ -69,18 +68,6 @@ internal static class ZoneLimitConfiguration
         {
             ApplyConfiguration([], default);
         }
-    }
-
-    public static bool TryGetLimit(Vector2i zone, out int limit)
-    {
-        if (TryGetRule(zone, out ZoneLimitRule rule))
-        {
-            limit = rule.Limit;
-            return true;
-        }
-
-        limit = 0;
-        return false;
     }
 
     public static bool TryGetRule(Vector2i zone, out ZoneLimitRule rule)

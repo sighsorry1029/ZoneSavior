@@ -137,14 +137,9 @@ internal static partial class ZoneBundleCommands
         }
     }
 
-    private static void SanitizeForSave(SaveEntryKind kind, DataEntry data, string sanitize)
+    private static void SanitizeForSave(SaveEntryKind kind, DataEntry data, bool wearNTear)
     {
-        data.OriginalId = ZDOID.None;
-        data.TargetConnectionId = ZDOID.None;
-        data.ConnectionHash = 0;
-        data.ConnectionType = ZDOExtraData.ConnectionType.None;
-
-        if (string.Equals(sanitize, WearNTearSanitize, StringComparison.Ordinal))
+        if (wearNTear)
         {
             RemoveWearNTearVolatileKeys(data);
             return;
@@ -157,22 +152,15 @@ internal static partial class ZoneBundleCommands
         }
     }
 
-    private static void SanitizeForLoad(ZoneBundleEntry entry, GameObject prefab, DataEntry data)
+    private static void SanitizeForLoad(GameObject prefab, DataEntry data)
     {
-        data.OriginalId = ZDOID.None;
-        data.TargetConnectionId = ZDOID.None;
-        data.ConnectionHash = 0;
-        data.ConnectionType = ZDOExtraData.ConnectionType.None;
-
-        if (string.Equals(entry.Sanitize, WearNTearSanitize, StringComparison.Ordinal) ||
-            (string.IsNullOrEmpty(entry.Sanitize) && prefab.GetComponent<WearNTear>()))
+        if (prefab.GetComponent<WearNTear>())
         {
             RemoveWearNTearVolatileKeys(data);
             return;
         }
 
-        if (!string.Equals(entry.Sanitize, MonsterSanitize, StringComparison.Ordinal) &&
-            !string.Equals(entry.Sanitize, TamedMonsterSanitize, StringComparison.Ordinal))
+        if (!prefab.GetComponent<Tameable>() || !prefab.GetComponent<MonsterAI>())
         {
             return;
         }
@@ -194,17 +182,13 @@ internal static partial class ZoneBundleCommands
     {
         KeepOnly(data.Strings, ZDOVars.s_tamedName, ZDOVars.s_tamedNameAuthor);
         KeepOnly(data.Ints, ZDOVars.s_level, ZDOVars.s_tamed, ZDOVars.s_haveSaddleHash);
-        KeepOnly(data.Bools, ZDOVars.s_tamed, ZDOVars.s_haveSaddleHash);
-
         data.Floats.Clear();
-        data.Hashes.Clear();
         data.Longs.Clear();
         data.Vecs.Clear();
         data.Quats.Clear();
         data.ByteArrays.Clear();
 
         data.Ints[ZDOVars.s_tamed] = 1;
-        data.Bools[ZDOVars.s_tamed] = true;
     }
 
     private static void RemoveCommonEntityVolatileKeys(DataEntry data)
@@ -235,8 +219,6 @@ internal static partial class ZoneBundleCommands
         data.Strings?.Remove(hash);
         data.Floats?.Remove(hash);
         data.Ints?.Remove(hash);
-        data.Bools?.Remove(hash);
-        data.Hashes?.Remove(hash);
         data.Longs?.Remove(hash);
         data.Vecs?.Remove(hash);
         data.Quats?.Remove(hash);

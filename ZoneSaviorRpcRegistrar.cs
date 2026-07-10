@@ -23,4 +23,12 @@ internal sealed class ZoneRpcRegistrar
     {
         _registeredRoutedRpc = null;
     }
+
+    public static bool IsServerSender(long sender)
+    {
+        return ZNet.instance != null &&
+               !ZNet.instance.IsServer() &&
+               ZRoutedRpc.instance != null &&
+               sender == ZRoutedRpc.instance.GetServerPeerID();
+    }
 }

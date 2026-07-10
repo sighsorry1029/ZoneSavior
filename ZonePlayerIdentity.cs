@@ -5,27 +5,6 @@ namespace ZoneSavior;
 
 internal static class ZonePlayerIdentity
 {
-    public static string ResolvePlatformId(Player? player, long sender, long playerId)
-    {
-        if (player != null)
-        {
-            return ResolveLocalPlatformId(playerId);
-        }
-
-        ZNetPeer? peer = ZNet.instance?.GetPeer(sender);
-        if (peer != null)
-        {
-            return ResolvePeerPlatformId(peer, playerId);
-        }
-
-        if (Player.m_localPlayer != null && Player.m_localPlayer.GetPlayerID() == playerId)
-        {
-            return ResolveLocalPlatformId(playerId);
-        }
-
-        return FallbackPlatformId(playerId);
-    }
-
     public static string ResolvePeerPlatformId(ZNetPeer peer, long playerId)
     {
         if (peer == null)

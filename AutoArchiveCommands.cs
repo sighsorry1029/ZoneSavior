@@ -85,7 +85,7 @@ internal static class AutoArchiveCommands
 
         try
         {
-            if (!IsAuthorizedSender(sender))
+            if (!ZoneBundleCommands.IsAuthorizedSender(sender))
             {
                 SendResult(sender, AutoArchiveCommandResult.Fail("Admin only."));
                 return;
@@ -115,13 +115,20 @@ internal static class AutoArchiveCommands
 
     private static void RPC_HandleResult(long sender, ZPackage package)
     {
-        if (ZNet.instance != null && ZNet.instance.IsServer())
+        if (!ZoneRpcRegistrar.IsServerSender(sender))
         {
             return;
         }
 
-        AutoArchiveCommandResult result = ZoneBundleSerialization.Deserialize<AutoArchiveCommandResult>(package.ReadString());
-        ShowResult(result, Console.instance);
+        try
+        {
+            AutoArchiveCommandResult result = ZoneBundleSerialization.Deserialize<AutoArchiveCommandResult>(package.ReadString());
+            ShowResult(result, Console.instance);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning($"Failed to read auto archive command result: {ex.Message}");
+        }
     }
 
     private static void StartRequest(AutoArchiveCommandRequest request, Action<AutoArchiveCommandResult> onComplete)
@@ -235,6 +242,7 @@ internal static class AutoArchiveCommands
     private static void ExecuteDebugZone(string[] args, List<string> messages)
     {
         Vector2i zone = ParseZoneSpec(args.Skip(1));
+        ZoneSaviorBuildRecipeRules.RefreshIndex();
         AutoArchiveZoneDebugReport report = BuildZoneDebugReport(zone);
         string path = WriteZoneDebugReport(report);
 
@@ -500,13 +508,6 @@ internal static class AutoArchiveCommands
         {
             throw new InvalidOperationException("Admin only.");
         }
-    }
-
-    private static bool IsAuthorizedSender(long sender)
-    {
-        ZNetPeer peer = ZNet.instance.GetPeer(sender);
-        string hostName = peer?.m_rpc?.m_socket?.GetHostName() ?? "";
-        return hostName.Length > 0 && ZNet.instance.IsAdmin(hostName);
     }
 
     private static void ShowResult(AutoArchiveCommandResult result, Terminal? terminal)

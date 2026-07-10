@@ -6,6 +6,13 @@ namespace ZoneSavior;
 
 internal static partial class ZoneBundleCommands
 {
+    private enum ZoneBundleTerrainCaptureState
+    {
+        NotLoaded,
+        LoadedNoContacts,
+        Contacts
+    }
+
     private readonly struct ZoneLoadStats
     {
         public ZoneLoadStats(int removed, int created, bool terrainApplied)
@@ -106,9 +113,9 @@ internal static partial class ZoneBundleCommands
             return ClientPreparedZones.Count > 0 ? $", terrainBy: witness-client {ChangedZones}/{PreparedZones} prepared" : "";
         }
 
-        public static TerrainPreparationResult Completed(bool clientAssisted, int preparedZones, int changedZones)
+        public static TerrainPreparationResult Completed(int preparedZones, int changedZones)
         {
-            return new TerrainPreparationResult(true, "", clientAssisted ? [] : [], preparedZones, changedZones);
+            return new TerrainPreparationResult(true, "", [], preparedZones, changedZones);
         }
 
         public static TerrainPreparationResult Completed(HashSet<Vector2i> clientPreparedZones, int preparedZones, int changedZones)
@@ -177,10 +184,12 @@ internal static partial class ZoneBundleCommands
         {
             TargetZone = targetZone;
             Bundle = bundle;
+            RequiresTerrain = RequiresTerrainApply(bundle);
         }
 
         public Vector2i TargetZone { get; }
         public ZoneBundleFile Bundle { get; }
+        public bool RequiresTerrain { get; }
     }
 
     private readonly struct ResetVerificationResult

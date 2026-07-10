@@ -143,9 +143,5 @@ internal readonly struct TerrainWorldContact
     public float WorldZ { get; }
     public float WorldY { get; }
 
-    public Vector3 ToVector3()
-    {
-        return new Vector3(WorldX, WorldY, WorldZ);
-    }
 }
 

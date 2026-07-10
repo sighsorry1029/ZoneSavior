@@ -1,5 +1,7 @@
 | `Version` | `Update Notes`                                                                                   |
 |-----------|--------------------------------------------------------------------------------------------------|
+| 1.2.1     | - Added destructive-load preflight validation and generation-based atomic zone bundle commits. <br> - Made activity reloads fully validated and atomic. <br> - Reduced terrain witness payloads, repeated bundle scans, and stale recipe-index risk. |
+| 1.2.0     | - Added strict zone bundle preflight validation, safe tag paths, and atomic activity/archive commits. <br> - Reduced terrain witness RPC payloads and hardened RPC sender/session handling. <br> - Simplified terrain and archive internals; older zone bundle files must be re-saved. |
 | 1.1.0     | - Added runtime support grace for zones loaded with `zs_loadzone`, with Zone UI countdown display. <br> - Improved zone bundle restore stability for tamed animals and missing prefab entries. |
 | 1.0.10    | - Allowed RCON and dedicated server zone loads/restores to use nearby ZoneSavior clients as terrain witnesses when the server has not loaded the target terrain. |
 | 1.0.9     | - Removed admin terrain tool pieces from build tables when the player is not in the allowed admin/debug state. |

@@ -13,7 +13,7 @@ namespace ZoneSavior;
 public partial class ZoneSaviorPlugin : BaseUnityPlugin
 {
     internal const string ModName = "ZoneSavior";
-    internal const string ModVersion = "1.1.0";
+    internal const string ModVersion = "1.2.1";
     internal const string Author = "sighsorry";
     internal const string ModGUID = $"{Author}.{ModName}";
     internal const string DataStorageFolder = "ZoneSavior";
@@ -37,7 +37,6 @@ public partial class ZoneSaviorPlugin : BaseUnityPlugin
         MinimumRequiredVersion = ModVersion
     };
 
-    internal static string ConnectionError = "";
     internal static ZoneSaviorPlugin Instance { get; private set; } = null!;
 
     private readonly Harmony _harmony = new(ModGUID);

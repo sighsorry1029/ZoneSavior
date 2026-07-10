@@ -5,10 +5,34 @@ namespace ZoneSavior;
 
 internal static class ZoneStructureClassifier
 {
-    public static bool TryInspectAutoArchiveCandidate(ZDO zdo, out ZoneStructureInfo info)
+    public static bool TryGetAutoArchiveCandidate(
+        ZDO zdo,
+        out Vector2i objectZone,
+        out long creatorPlayerId,
+        out string creatorName)
     {
-        info = Inspect(zdo);
-        return info.AutoArchiveCandidatePiece;
+        objectZone = default;
+        creatorPlayerId = 0L;
+        creatorName = "";
+        if (zdo == null || !zdo.IsValid())
+        {
+            return false;
+        }
+
+        GameObject? prefab = ZNetScene.instance?.GetPrefab(zdo.GetPrefab());
+        creatorPlayerId = zdo.GetLong(ZDOVars.s_creator, 0L);
+        if (!prefab ||
+            creatorPlayerId == 0L ||
+            prefab.GetComponent<WearNTear>() == null ||
+            !ZoneSaviorBuildRecipeRules.HasBuildRecipe(prefab))
+        {
+            creatorPlayerId = 0L;
+            return false;
+        }
+
+        objectZone = ZoneSystem.GetZone(zdo.GetPosition());
+        creatorName = zdo.GetString(ZDOVars.s_creatorName, "");
+        return true;
     }
 
     public static ZoneStructureInfo Inspect(ZDO zdo, Vector2i? requestedZone = null)
@@ -24,8 +48,7 @@ internal static class ZoneStructureClassifier
         Vector2i objectZone = ZoneSystem.GetZone(position);
         GameObject? prefab = ZNetScene.instance?.GetPrefab(zdo.GetPrefab());
         bool hasPrefab = prefab != null && prefab;
-        bool inRequestedZone = requestedZone == null ||
-                               (objectZone.x == requestedZone.Value.x && objectZone.y == requestedZone.Value.y);
+        bool inRequestedZone = requestedZone == null || objectZone == requestedZone.Value;
 
         info.ZdoId = zdo.m_uid.ToString();
         info.PrefabHash = zdo.GetPrefab();

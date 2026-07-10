@@ -159,11 +159,8 @@
         <Compile Include="ZoneBundleRestoreReset.cs"/>
         <Compile Include="ZoneBundleSerialization.cs"/>
         <Compile Include="ZoneBundleSupportGrace.cs"/>
-        <Compile Include="ZoneBundleTerrainBaseLayer.cs"/>
         <Compile Include="ZoneBundleTerrainGrid.cs"/>
-        <Compile Include="ZoneBundleTerrainPlanTypes.cs"/>
         <Compile Include="ZoneBundleTerrainSupportSamples.cs"/>
-        <Compile Include="ZoneBundleTerrainTypes.cs"/>
         <Compile Include="ZoneBundleStore.cs"/>
         <Compile Include="ZoneBundleTerrain.cs"/>
         <Compile Include="ZoneBundleZdoData.cs"/>
@@ -181,7 +178,6 @@
         <Compile Include="ZoneSaviorPlugin.cs"/>
         <Compile Include="ZoneTerrainContactSampler.cs"/>
         <Compile Include="ZoneSaviorToolAim.cs"/>
-        <Compile Include="ZoneSaviorWorldEditTerrainCompat.cs"/>
     </ItemGroup>
     <ItemGroup>
         <None Include="README.md"/>

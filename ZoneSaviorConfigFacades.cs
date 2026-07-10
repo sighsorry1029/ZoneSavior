@@ -81,6 +81,12 @@ internal static class ClientConfig
     }
 }
 
+internal enum ZoneBundleWearNTearSaveMode
+{
+    CreatorOnly = 0,
+    IncludeCreatorless = 1
+}
+
 internal static class ZoneBundleConfig
 {
     private static ConfigEntry<ZoneBundleWearNTearSaveMode> _wearNTearSaveMode = null!;
