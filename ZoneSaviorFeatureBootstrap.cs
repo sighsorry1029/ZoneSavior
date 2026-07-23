@@ -27,7 +27,6 @@ internal static class ZoneSaviorFeatureBootstrap
 
     public static void Update()
     {
-        CreatureRemovalTracker.Update();
         ZoneBundleCommands.RegisterRpcs();
         ZoneBundleSupportGrace.Update();
         AutoArchiveCommands.RegisterRpcs();
@@ -43,7 +42,6 @@ internal static class ZoneSaviorFeatureBootstrap
 
     public static void Shutdown()
     {
-        CreatureRemovalTracker.Clear();
         ZonePieceCounter.Clear();
         ZoneBundleSupportGrace.Shutdown();
         ZoneBoundaryOverlay.Shutdown();

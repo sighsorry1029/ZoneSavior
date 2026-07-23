@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
@@ -90,6 +91,36 @@ internal static partial class ZoneBundleCommands
         }
 
         RemoveMonsterVolatileKeys(data);
+    }
+
+    private static void RemoveStaleCharacterReferencesAfterLoad()
+    {
+        List<Character> characters = Character.GetAllCharacters();
+        for (int i = characters.Count - 1; i >= 0; i--)
+        {
+            Character staleCharacter = characters[i];
+            if (staleCharacter)
+            {
+                continue;
+            }
+
+            if (!ReferenceEquals(staleCharacter, null))
+            {
+                try
+                {
+                    if (EnemyHud.instance)
+                    {
+                        EnemyHud.instance.RemoveCharacterHud(staleCharacter);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug($"Failed to remove a stale Character HUD reference after zone load: {ex.Message}");
+                }
+            }
+
+            characters.RemoveAt(i);
+        }
     }
 
     private static void RemoveWearNTearVolatileKeys(DataEntry data)

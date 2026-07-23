@@ -1771,7 +1771,7 @@ internal static partial class ZoneBundleCommands
         }
 
         issues.Log(targetZone, bundle.Tag);
-        CreatureRemovalTracker.SweepStaleCharacterReferences();
+        RemoveStaleCharacterReferencesAfterLoad();
         onComplete(new ZoneLoadStats(removed, created, terrainApplied));
     }
 
