@@ -135,6 +135,7 @@
         <Compile Include="AutoArchiveService.cs"/>
         <Compile Include="AutoArchiveStore.cs"/>
         <Compile Include="BuildCounterHud.cs"/>
+        <Compile Include="CreatureRemovalSafety.cs"/>
         <Compile Include="ZoneSaviorTimestamp.cs"/>
         <Compile Include="VeiledRecipesCompat.cs"/>
         <Compile Include="ZoneSaviorExpandWorldDataCompat.cs"/>

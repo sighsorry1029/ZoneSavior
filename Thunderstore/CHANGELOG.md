@@ -1,5 +1,6 @@
 | `Version` | `Update Notes`                                                                                   |
 |-----------|--------------------------------------------------------------------------------------------------|
+| 1.2.2     | - Improved SupportFill contact capture with actual collider and mesh support points, preventing invalid lower overlaps from hiding valid terrain contacts. <br> - Hardened creature teardown during zone overwrite and reset by cleaning stale Character, HUD, and status-effect references. |
 | 1.2.1     | - Added destructive-load preflight validation and generation-based atomic zone bundle commits. <br> - Made activity reloads fully validated and atomic. <br> - Reduced terrain witness payloads, repeated bundle scans, and stale recipe-index risk. |
 | 1.2.0     | - Added strict zone bundle preflight validation, safe tag paths, and atomic activity/archive commits. <br> - Reduced terrain witness RPC payloads and hardened RPC sender/session handling. <br> - Simplified terrain and archive internals; older zone bundle files must be re-saved. |
 | 1.1.0     | - Added runtime support grace for zones loaded with `zs_loadzone`, with Zone UI countdown display. <br> - Improved zone bundle restore stability for tamed animals and missing prefab entries. |

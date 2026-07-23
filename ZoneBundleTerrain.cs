@@ -329,11 +329,6 @@ internal static partial class ZoneBundleTerrain
         maxZ = center.z + half + padding;
     }
 
-    public static bool TryGetWearNTearBounds(GameObject prefab, Vector3 position, Quaternion rotation, Vector3 scale, out Bounds bounds)
-    {
-        return TryGetWearNTearWorldBounds(prefab, position, rotation, scale, out bounds);
-    }
-
     public static bool TryGetTerrainHeight(float x, float z, out float height)
     {
         return TryGetCurrentTerrainHeight(x, z, out height);

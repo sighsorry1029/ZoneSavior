@@ -8,7 +8,8 @@ internal static class ZoneTerrainContactSampler
 {
     public static List<TerrainWorldContact> CaptureWorldContacts(IEnumerable<TerrainContactSource> sources, float tolerance)
     {
-        Dictionary<long, TerrainWorldContact> lowestByCell = [];
+        Dictionary<long, TerrainWorldContact> lowestContactByCell = [];
+        Dictionary<long, float> terrainHeightByCell = [];
         foreach (TerrainContactSource source in sources)
         {
             if (!source.Prefab || source.Prefab.GetComponent<WearNTear>() == null)
@@ -16,27 +17,37 @@ internal static class ZoneTerrainContactSampler
                 continue;
             }
 
-            if (!ZoneBundleTerrain.TryGetWearNTearBounds(source.Prefab, source.Position, source.Rotation, source.Scale, out Bounds bounds))
+            foreach (TerrainWorldContact candidate in ZoneBundleTerrain.CollectWearNTearWorldSupportCandidates(
+                         source.Prefab,
+                         source.Position,
+                         source.Rotation,
+                         source.Scale))
             {
-                continue;
-            }
+                long key = PackCell((int)candidate.WorldX, (int)candidate.WorldZ);
+                if (!terrainHeightByCell.TryGetValue(key, out float terrainY))
+                {
+                    terrainY = ZoneBundleTerrain.TryGetTerrainHeight(candidate.WorldX, candidate.WorldZ, out float height)
+                        ? height
+                        : float.NaN;
+                    terrainHeightByCell[key] = terrainY;
+                }
 
-            AddLowestBoundsFootprintContacts(bounds, lowestByCell);
+                if (float.IsNaN(terrainY) || Mathf.Abs(terrainY - candidate.WorldY) > tolerance)
+                {
+                    continue;
+                }
+
+                if (!lowestContactByCell.TryGetValue(key, out TerrainWorldContact existing) || candidate.WorldY < existing.WorldY)
+                {
+                    lowestContactByCell[key] = candidate;
+                }
+            }
         }
 
-        List<TerrainWorldContact> contacts = [];
-        foreach (TerrainWorldContact candidate in lowestByCell.Values.OrderBy(contact => contact.WorldZ).ThenBy(contact => contact.WorldX))
-        {
-            if (!ZoneBundleTerrain.TryGetTerrainHeight(candidate.WorldX, candidate.WorldZ, out float terrainY) ||
-                Mathf.Abs(terrainY - candidate.WorldY) > tolerance)
-            {
-                continue;
-            }
-
-            contacts.Add(candidate);
-        }
-
-        return contacts;
+        return lowestContactByCell.Values
+            .OrderBy(contact => contact.WorldZ)
+            .ThenBy(contact => contact.WorldX)
+            .ToList();
     }
 
     public static List<TerrainContactSource> FromZoneEntries(Vector2i zone, float sourceBaseY, IEnumerable<ZoneBundleEntry> entries)
@@ -79,28 +90,6 @@ internal static class ZoneTerrainContactSampler
             .OrderBy(contact => contact.LocalZ)
             .ThenBy(contact => contact.LocalX)
             .ToList();
-    }
-
-    private static void AddLowestBoundsFootprintContacts(Bounds bounds, Dictionary<long, TerrainWorldContact> lowestByCell)
-    {
-        float bottomY = bounds.min.y;
-        int minX = Mathf.FloorToInt(bounds.min.x);
-        int maxX = Mathf.CeilToInt(bounds.max.x);
-        int minZ = Mathf.FloorToInt(bounds.min.z);
-        int maxZ = Mathf.CeilToInt(bounds.max.z);
-
-        for (int x = minX; x <= maxX; x++)
-        {
-            for (int z = minZ; z <= maxZ; z++)
-            {
-                long key = PackCell(x, z);
-                TerrainWorldContact contact = new(x, z, bottomY);
-                if (!lowestByCell.TryGetValue(key, out TerrainWorldContact existing) || contact.WorldY < existing.WorldY)
-                {
-                    lowestByCell[key] = contact;
-                }
-            }
-        }
     }
 
     private static long PackCell(int x, int z)

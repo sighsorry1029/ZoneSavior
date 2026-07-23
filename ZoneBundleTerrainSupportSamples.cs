@@ -235,6 +235,33 @@ internal static partial class ZoneBundleTerrain
         }
     }
 
+    internal static List<TerrainWorldContact> CollectWearNTearWorldSupportCandidates(
+        GameObject prefab,
+        Vector3 position,
+        Quaternion rotation,
+        Vector3 scale)
+    {
+        List<TerrainSupportSample> samples = [];
+        AddWearNTearSupportSamples(prefab, position, rotation, scale, 0f, samples);
+
+        float minimumReasonableY = position.y - FallbackMaxColliderDepthBelowOrigin;
+        List<TerrainWorldContact> contacts = [];
+        foreach (TerrainSupportSample sample in samples)
+        {
+            if (sample.RelativeY < minimumReasonableY)
+            {
+                continue;
+            }
+
+            contacts.Add(new TerrainWorldContact(
+                Mathf.RoundToInt(sample.WorldX),
+                Mathf.RoundToInt(sample.WorldZ),
+                sample.RelativeY));
+        }
+
+        return contacts;
+    }
+
     private static void AddColliderBottomSamples(Bounds bounds, Matrix4x4 colliderToWorld, float baseWorldY, List<TerrainSupportSample> samples)
     {
         int xSteps = GetFallbackSampleSteps(bounds.size.x);
