@@ -74,9 +74,11 @@ with a manifest plus one bundle file per saved source zone:
 
 ```text
 manifest.yml
-bundle001.zonebundle.yml
-bundle002.zonebundle.yml
+bundle001_<generation>.zonebundle.yml.gz
+bundle002_<generation>.zonebundle.yml.gz
 ```
+
+Each bundle is compact YAML compressed independently with gzip. ZoneSavior opens it in memory, so RCON and in-game commands use the same syntax without manual extraction.
 
 If a connected inactive cluster has multiple creators, ZoneSavior uses the representative owner plus a compact multi-owner suffix, for example `auto_Snack_plus1_b7a5018f_c103`. The manifest and each zone bundle also list creator playerIDs so admins can inspect or split mixed-owner archives later. If the same auto archive tag already exists, ZoneSavior appends a collision suffix like `_n002` instead of overwriting the old bundle.
 
@@ -105,7 +107,7 @@ Thunderstore dependencies use the `{team}-{package}-{version}` format documented
 ]
 ```
 
-Older zone bundles saved with the previous World Edit Commands `DataEntry` payload are intentionally not supported by the new loader. Re-save zones with the current ZoneSavior version to get `zs-zdo-v1` payloads.
+All previous manifest and bundle versions are intentionally not loaded or converted, including uncompressed bundles and bundles saved with the old World Edit Commands `DataEntry` payload. If the original world data still exists, create a new archive from that live world with the current ZoneSavior version to get the current compressed format and `zs-zdo-v1` payloads.
 
 ## Referenced mod summaries
 

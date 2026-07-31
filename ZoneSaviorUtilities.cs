@@ -119,6 +119,16 @@ internal static class ZoneSaviorFiles
 
     public static void WriteAllTextAtomic(string path, string contents, Encoding? encoding = null)
     {
+        WriteAtomic(path, stream =>
+        {
+            using StreamWriter writer = new(stream, encoding ?? DefaultEncoding, 4096, leaveOpen: true);
+            writer.Write(contents);
+            writer.Flush();
+        });
+    }
+
+    public static void WriteAtomic(string path, Action<Stream> write)
+    {
         string fullPath = Path.GetFullPath(path);
         string directory = Path.GetDirectoryName(fullPath)!;
         Directory.CreateDirectory(directory);
@@ -129,10 +139,8 @@ internal static class ZoneSaviorFiles
         try
         {
             using (FileStream stream = new(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-            using (StreamWriter writer = new(stream, encoding ?? DefaultEncoding))
             {
-                writer.Write(contents);
-                writer.Flush();
+                write(stream);
                 stream.Flush(flushToDisk: true);
             }
 

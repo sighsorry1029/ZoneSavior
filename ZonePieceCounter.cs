@@ -11,10 +11,12 @@ internal static class ZonePieceCounter
     private static readonly Dictionary<Vector2i, int> ZoneCounts = [];
 
     private static ManualLogSource? _logger;
+    private static bool _wasEnabled;
 
     public static void Initialize(ManualLogSource logger)
     {
         _logger = logger;
+        _wasEnabled = false;
         Clear();
     }
 
@@ -30,6 +32,14 @@ internal static class ZonePieceCounter
         if (!ZoneLimitConfiguration.Enabled)
         {
             KnownStructures.Clear();
+            _wasEnabled = false;
+            return;
+        }
+
+        if (!_wasEnabled)
+        {
+            _wasEnabled = true;
+            RegisterLoadedStructures();
             return;
         }
 
@@ -123,7 +133,7 @@ internal static class ZonePieceCounter
         }
 
         Refresh(piece);
-        if (!TryGetStructureEntry(piece.gameObject, out StructureEntry entry))
+        if (!KnownStructures.TryGetValue(piece.gameObject.GetInstanceID(), out StructureEntry entry))
         {
             return;
         }
@@ -193,9 +203,20 @@ internal static class ZonePieceCounter
         }
     }
 
-    private static bool TryGetStructureEntry(GameObject gameObject, out StructureEntry entry)
+    private static void RegisterLoadedStructures()
     {
-        return KnownStructures.TryGetValue(gameObject.GetInstanceID(), out entry);
+        if (ZNetScene.instance == null)
+        {
+            return;
+        }
+
+        foreach (ZNetView view in new List<ZNetView>(ZNetScene.instance.m_instances.Values))
+        {
+            if (view != null)
+            {
+                Refresh(view.gameObject);
+            }
+        }
     }
 
     private static bool TryBuildStructureState(GameObject gameObject, out StructureState state)

@@ -9,7 +9,11 @@ namespace ZoneSavior;
 
 internal static partial class AdminTerrainTool
 {
+    private const float TooltipFontSizeMultiplier = 1.15f;
+
     private static readonly List<PieceTable> PieceTableScratch = [];
+    private static float _defaultTooltipFontSize = -1f;
+    private static Hud? _tooltipHud;
 
     public static void AddToAvailablePieces(PieceTable table, Player player)
     {
@@ -38,12 +42,12 @@ internal static partial class AdminTerrainTool
         AddPieceToTable(table, _resetPrefab);
     }
 
-    private static GameObject? EnsureRegistered()
+    private static void EnsureRegistered()
     {
         ZNetScene scene = ZNetScene.instance;
         if (scene == null)
         {
-            return _prefab;
+            return;
         }
 
         if (!_prefab)
@@ -78,7 +82,7 @@ internal static partial class AdminTerrainTool
             IsRegistered(scene, ResetPrefabHash) &&
             IsRegistered(scene, PaintResetPrefabHash))
         {
-            return _prefab;
+            return;
         }
 
         RegisterPrefab(scene, PrefabHash, PrefabName, _prefab);
@@ -87,8 +91,6 @@ internal static partial class AdminTerrainTool
         RegisterPrefab(scene, PaintResetPrefabHash, PaintResetPrefabName, _paintResetPrefab);
         RegisterPrefab(scene, ResetPrefabHash, ResetPrefabName, _resetPrefab);
         _registeredScene = scene;
-
-        return _prefab;
     }
 
     private static bool IsRegistered(ZNetScene scene, int prefabHash)
@@ -325,7 +327,6 @@ internal static partial class AdminTerrainTool
     private static GameObject CreatePrefab(string prefabName, bool slope, bool reset = false, bool paint = false, bool paintReset = false)
     {
         GameObject prefab = new(prefabName);
-        prefab.name = prefabName;
         prefab.SetActive(false);
         UnityEngine.Object.DontDestroyOnLoad(prefab);
 
@@ -367,6 +368,48 @@ internal static partial class AdminTerrainTool
         piece.m_description = GetPieceDescription(prefab);
         return prefab;
     }
+
+    internal static void PreparePieceTooltip(Hud hud, Piece piece)
+    {
+        if (!hud || !hud.m_pieceDescription)
+        {
+            return;
+        }
+
+        CaptureTooltipFontSize(hud);
+
+        if (!IsProxyPiece(piece))
+        {
+            hud.m_pieceDescription.fontSize = _defaultTooltipFontSize;
+            return;
+        }
+
+        piece.m_description = GetPieceDescription(piece.gameObject);
+    }
+
+    internal static void ApplyPieceTooltipStyle(Hud hud, Piece piece)
+    {
+        if (!hud || !hud.m_pieceDescription || !IsProxyPiece(piece))
+        {
+            return;
+        }
+
+        CaptureTooltipFontSize(hud);
+        hud.m_pieceDescription.fontSize = Mathf.Max(
+            _defaultTooltipFontSize * TooltipFontSizeMultiplier,
+            _defaultTooltipFontSize + 1f);
+    }
+
+    private static void CaptureTooltipFontSize(Hud hud)
+    {
+        if (_tooltipHud == hud && _defaultTooltipFontSize >= 0f)
+        {
+            return;
+        }
+
+        _tooltipHud = hud;
+        _defaultTooltipFontSize = hud.m_pieceDescription.fontSize;
+    }
 }
 
 [HarmonyPatch(typeof(ZNetScene), nameof(ZNetScene.Awake))]
@@ -403,5 +446,19 @@ internal static class AdminTerrainToolKnownRecipesPatch
     private static void Prefix(Player __instance)
     {
         AdminTerrainTool.SanitizeKnownRecipePieceTables(__instance);
+    }
+}
+
+[HarmonyPatch(typeof(Hud), "SetupPieceInfo")]
+internal static class AdminTerrainToolTooltipPatch
+{
+    private static void Prefix(Hud __instance, Piece piece)
+    {
+        AdminTerrainTool.PreparePieceTooltip(__instance, piece);
+    }
+
+    private static void Postfix(Hud __instance, Piece piece)
+    {
+        AdminTerrainTool.ApplyPieceTooltipStyle(__instance, piece);
     }
 }

@@ -3,7 +3,6 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
-using static ZoneSavior.ZoneBundleTerrainGrid;
 
 namespace ZoneSavior;
 
@@ -19,6 +18,25 @@ internal static partial class ZoneBundleTerrain
     private const float NativeMaxTerrainDelta = 8f;
     private const int TerrainContextEntryBatchSize = 128;
     private const int TerrainApplyNodeBatchSize = 1024;
+
+    private static long PackCell(int x, int z)
+    {
+        return ((long)x << 32) ^ (uint)z;
+    }
+
+    private static void UnpackCell(long key, out int x, out int z)
+    {
+        x = (int)(key >> 32);
+        z = (int)key;
+    }
+
+    private static Vector3 VertexToWorld(Heightmap heightmap, int x, int z)
+    {
+        Vector3 position = heightmap.transform.position;
+        position.x += (x - heightmap.m_width / 2) * heightmap.m_scale;
+        position.z += (z - heightmap.m_width / 2) * heightmap.m_scale;
+        return position;
+    }
 
     public static IEnumerator ComputeSupportAnchorAsync(IEnumerable<Vector2i> zones, Action<TerrainSourceAnchor> onComplete)
     {
@@ -204,9 +222,9 @@ internal static partial class ZoneBundleTerrain
         onComplete(changed);
     }
 
-    public static bool IsSupportWearNTear(ZDO zdo, Vector2i zone, out GameObject prefab)
+    public static bool IsSupportWearNTear(ZDO zdo, Vector2i zone, GameObject prefab)
     {
-        return TryReadSupportWearNTear(zdo, zone, ZoneBundleConfig.WearNTearSaveMode, out prefab);
+        return IsSupportWearNTear(zdo, zone, ZoneBundleConfig.WearNTearSaveMode, prefab);
     }
 
     public static bool CanApply(Vector2i zone)
@@ -388,7 +406,10 @@ internal static partial class ZoneBundleTerrain
             yield break;
         }
 
-        PersistAppliedSupportCells(heightmap, width, worldHeights);
+        TerrainComp compiler = heightmap.GetAndCreateTerrainCompiler();
+        PersistSupportFillTerrain(compiler, width, worldHeights);
+        heightmap.Poke(delayed: false);
+        ClutterSystem.instance?.ResetGrass(heightmap.transform.position, SearchRadius);
         onComplete(true);
     }
 
@@ -418,18 +439,6 @@ internal static partial class ZoneBundleTerrain
 
         worldHeights[index] = desired;
         return Mathf.Abs(current - desired) > 0.01f;
-    }
-
-    private static bool PersistAppliedSupportCells(
-        Heightmap heightmap,
-        int width,
-        float[] worldHeights)
-    {
-        TerrainComp compiler = heightmap.GetAndCreateTerrainCompiler();
-        PersistSupportFillTerrain(compiler, width, worldHeights);
-        heightmap.Poke(delayed: false);
-        ClutterSystem.instance?.ResetGrass(heightmap.transform.position, SearchRadius);
-        return true;
     }
 
     private static void PersistSupportFillTerrain(

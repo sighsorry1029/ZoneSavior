@@ -65,7 +65,7 @@ internal static class AutoArchiveCommands
     {
         if (ZNet.instance.IsServer())
         {
-            StartRequest(request, result => ShowResult(result, context));
+            ShowResult(ExecuteRequest(request), context);
             return;
         }
 
@@ -92,7 +92,7 @@ internal static class AutoArchiveCommands
             }
 
             AutoArchiveCommandRequest request = ZoneBundleSerialization.Deserialize<AutoArchiveCommandRequest>(package.ReadString());
-            StartRequest(request, result => SendResult(sender, result));
+            SendResult(sender, ExecuteRequest(request));
         }
         catch (Exception ex)
         {
@@ -129,11 +129,6 @@ internal static class AutoArchiveCommands
         {
             _logger.LogWarning($"Failed to read auto archive command result: {ex.Message}");
         }
-    }
-
-    private static void StartRequest(AutoArchiveCommandRequest request, Action<AutoArchiveCommandResult> onComplete)
-    {
-        onComplete(ExecuteRequest(request));
     }
 
     private static AutoArchiveCommandResult ExecuteRequest(AutoArchiveCommandRequest request)
@@ -299,7 +294,11 @@ internal static class AutoArchiveCommands
             .ToList();
 
         report.Creators = creatorIds
-            .Select(playerId => BuildCreatorDebug(playerId, utcNow))
+            .Select(playerId => AutoArchiveStore.EvaluateCreatorArchiveEligibility(
+                playerId,
+                utcNow,
+                AutoArchiveConfig.InactiveDays,
+                recordUnknownPlayer: false))
             .ToList();
 
         bool allCreatorsEligible = report.Creators.Count > 0 && report.Creators.All(creator => creator.Eligible);
@@ -340,27 +339,6 @@ internal static class AutoArchiveCommands
             InRequestedZone = info.InRequestedZone,
             AutoArchiveCandidatePiece = info.AutoArchiveCandidatePiece,
             ExclusionReasons = info.ExclusionReasons
-        };
-    }
-
-    private static AutoArchiveZoneDebugCreator BuildCreatorDebug(long playerId, DateTime utcNow)
-    {
-        AutoArchiveCreatorEligibility evaluation = AutoArchiveStore.EvaluateCreatorArchiveEligibility(
-            playerId,
-            utcNow,
-            AutoArchiveConfig.InactiveDays,
-            recordUnknownPlayer: false);
-
-        return new AutoArchiveZoneDebugCreator
-        {
-            PlayerId = evaluation.PlayerId,
-            PlatformId = evaluation.PlatformId,
-            Names = evaluation.Names,
-            RecordedInActivity = evaluation.RecordedInActivity,
-            UnknownActivityRecord = evaluation.UnknownActivityRecord,
-            Protected = evaluation.Protected,
-            Eligible = evaluation.Eligible,
-            Reason = evaluation.Reason
         };
     }
 

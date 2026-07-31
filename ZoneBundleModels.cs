@@ -5,9 +5,9 @@ namespace ZoneSavior;
 
 internal sealed class ZoneBundleManifest
 {
-    public const int CurrentVersion = 1;
+    public const int CurrentVersion = 2;
 
-    public int Version { get; set; } = CurrentVersion;
+    public int? Version { get; set; }
     public string Tag { get; set; } = "";
     public string World { get; set; } = "";
     public string SavedAt { get; set; } = "";
@@ -32,9 +32,9 @@ internal sealed class ZoneBundleCreatorPlayer
 
 internal sealed class ZoneBundleFile
 {
-    public const int CurrentVersion = 2;
+    public const int CurrentVersion = 3;
 
-    public int Version { get; set; } = CurrentVersion;
+    public int? Version { get; set; }
     public string Tag { get; set; } = "";
     public float SourceBaseY { get; set; }
     public bool TerrainContactsCaptured { get; set; }
@@ -111,6 +111,28 @@ internal sealed class ZoneBundleCommandResult
             Message = message
         };
     }
+}
+
+internal sealed class ZoneBundleArchiveResult
+{
+    public bool Success { get; set; }
+    public string Message { get; set; } = "";
+    public string Tag { get; set; } = "";
+    public string ManifestPath { get; set; } = "";
+    public int ZoneCount { get; set; }
+    public int EntryCount { get; set; }
+    public int MonsterCount { get; set; }
+    public int TerrainLoaded { get; set; }
+    public int TerrainCaptured { get; set; }
+}
+
+internal sealed class ZoneBundleResetResult
+{
+    public bool Success { get; set; }
+    public string Message { get; set; } = "";
+    public int ZoneCount { get; set; }
+    public int RemovedCount { get; set; }
+    public int RemainingWearNTearCount { get; set; }
 }
 
 internal sealed class TerrainSupportTarget

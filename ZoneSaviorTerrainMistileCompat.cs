@@ -9,10 +9,16 @@ internal static class ZoneSaviorTerrainMistileCompat
 {
     private const string CompatTypeName = "TerrainMistile.TerrainMistileCompat";
     private static MethodInfo? _registerIgnoredTerrainAreaMethod;
+    private static bool _lookupCompleted;
 
     public static void RegisterIgnoredTerrainArea(Vector3 center, float radius, string source)
     {
-        _registerIgnoredTerrainAreaMethod ??= FindRegisterIgnoredTerrainAreaMethod();
+        if (!_lookupCompleted)
+        {
+            _registerIgnoredTerrainAreaMethod = FindRegisterIgnoredTerrainAreaMethod();
+            _lookupCompleted = true;
+        }
+
         if (_registerIgnoredTerrainAreaMethod == null)
         {
             return;
@@ -25,6 +31,7 @@ internal static class ZoneSaviorTerrainMistileCompat
         catch (Exception ex)
         {
             _registerIgnoredTerrainAreaMethod = null;
+            _lookupCompleted = false;
             ZoneSaviorPlugin.ZoneSaviorLogger.LogDebug($"TerrainMistile compat call failed: {ex.Message}");
         }
     }

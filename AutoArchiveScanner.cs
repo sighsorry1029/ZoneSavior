@@ -55,8 +55,14 @@ internal static class AutoArchiveScanner
         Dictionary<Vector2i, AutoArchiveZoneInfo> zoneInfos = [];
         yield return ScanZdosBySector(utcNow, zoneInfos, run);
 
-        AutoArchiveScanPolicy policy = AutoArchiveScanPolicy.FromOptions(options);
-        Dictionary<Vector2i, AutoArchiveZoneInfo> candidates = BuildCandidateZones(zoneInfos, utcNow, policy, run);
+        HashSet<long> targetPlayerIds = options.TargetPlayerIds.ToHashSet();
+        bool isTargetOverride = targetPlayerIds.Count > 0;
+        Dictionary<Vector2i, AutoArchiveZoneInfo> candidates = BuildCandidateZones(
+            zoneInfos,
+            utcNow,
+            targetPlayerIds,
+            options.ResetAfterSave,
+            run);
         run.CandidateZones = candidates.Count;
 
         List<List<Vector2i>> clusters = BuildClusters(candidates);
@@ -67,23 +73,8 @@ internal static class AutoArchiveScanner
         {
             clusterIndex++;
             ArchiveClusterRecord record = BuildClusterRecord(cluster, candidates);
-            bool smallCluster = policy.IsSmallCluster(record);
-
-            if (processedZones + cluster.Count > AutoArchiveConfig.MaxZonesPerRun)
-            {
-                record.Status = "skipped";
-                record.Reason = $"max zones per run would be exceeded ({processedZones + cluster.Count}/{AutoArchiveConfig.MaxZonesPerRun})";
-                run.Clusters.Add(record);
-                continue;
-            }
-
-            if (policy.RequiresCreatorEligibility && !AllCreatorsEligible(record.Creators, utcNow, out string creatorReason))
-            {
-                record.Status = "skipped";
-                record.Reason = creatorReason;
-                run.Clusters.Add(record);
-                continue;
-            }
+            bool smallCluster = !isTargetOverride &&
+                                record.PieceCount < AutoArchiveConfig.MinimumPiecesPerCluster;
 
             if (smallCluster)
             {
@@ -94,13 +85,38 @@ internal static class AutoArchiveScanner
                     run.Clusters.Add(record);
                     continue;
                 }
+            }
 
+            // The scan yields between clusters. Recheck immediately before reserving
+            // work so a creator who came online during an earlier cluster is protected.
+            if (!isTargetOverride &&
+                !AllCreatorsEligible(record.Creators, DateTime.UtcNow, out string creatorReason))
+            {
+                record.Status = "skipped";
+                record.Reason = creatorReason;
+                run.Clusters.Add(record);
+                continue;
+            }
+
+            if (processedZones + cluster.Count > AutoArchiveConfig.MaxZonesPerRun)
+            {
+                record.Status = "skipped";
+                record.Reason = $"max zones per run would be exceeded ({processedZones + cluster.Count}/{AutoArchiveConfig.MaxZonesPerRun})";
+                run.Clusters.Add(record);
+                continue;
+            }
+
+            // MaxZonesPerRun is a work reservation cap. Count an accepted cluster
+            // before starting it so failed save/reset attempts cannot bypass the cap.
+            processedZones += cluster.Count;
+
+            if (smallCluster)
+            {
                 if (options.DryRun)
                 {
                     record.Status = "dry-run-reset-without-save";
                     record.Reason = $"small inactive cluster would be reset without saving ({record.PieceCount}/{AutoArchiveConfig.MinimumPiecesPerCluster} pieces)";
                     run.Clusters.Add(record);
-                    processedZones += cluster.Count;
                     continue;
                 }
 
@@ -120,7 +136,6 @@ internal static class AutoArchiveScanner
                 record.Reason = resetOnlyResult.Message;
 
                 run.Clusters.Add(record);
-                processedZones += cluster.Count;
                 yield return null;
                 continue;
             }
@@ -129,9 +144,10 @@ internal static class AutoArchiveScanner
             if (options.DryRun)
             {
                 record.Status = "dry-run";
-                record.Reason = policy.DryRunCandidateReason();
+                record.Reason = isTargetOverride
+                    ? "target override candidate; dry run is enabled"
+                    : "candidate only; dry run is enabled";
                 run.Clusters.Add(record);
-                processedZones += cluster.Count;
                 continue;
             }
 
@@ -179,7 +195,6 @@ internal static class AutoArchiveScanner
             }
 
             run.Clusters.Add(record);
-            processedZones += cluster.Count;
             yield return null;
         }
 
@@ -280,20 +295,23 @@ internal static class AutoArchiveScanner
     private static Dictionary<Vector2i, AutoArchiveZoneInfo> BuildCandidateZones(
         Dictionary<Vector2i, AutoArchiveZoneInfo> zoneInfos,
         DateTime utcNow,
-        AutoArchiveScanPolicy policy,
+        HashSet<long> targetPlayerIds,
+        bool resetAfterSave,
         ArchiveRunRecord run)
     {
         Dictionary<Vector2i, AutoArchiveZoneInfo> candidates = [];
+        bool isTargetOverride = targetPlayerIds.Count > 0;
         foreach (AutoArchiveZoneInfo info in zoneInfos.Values)
         {
-            if (policy.IsTargetOverride)
+            if (isTargetOverride)
             {
-                if (!policy.IncludesTargetCreator(info.Creators))
+                if (!info.Creators.Any(targetPlayerIds.Contains))
                 {
                     continue;
                 }
 
-                if (policy.BlocksMixedOwnerReset && HasNonTargetCreators(info.Creators, policy.TargetPlayerIds, out List<long> nonTargetCreators))
+                if (resetAfterSave &&
+                    HasNonTargetCreators(info.Creators, targetPlayerIds, out List<long> nonTargetCreators))
                 {
                     run.Messages.Add(
                         $"Skipped zone ({info.Zone.x},{info.Zone.y}): target reset blocked for mixed-owner zone; non-target creator(s): {FormatCreatorList(nonTargetCreators)}");

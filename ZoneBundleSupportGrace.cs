@@ -167,7 +167,7 @@ internal static class ZoneBundleSupportGrace
             for (int i = 0; i < count; i++)
             {
                 DateTime expiresAt = new(package.ReadLong(), DateTimeKind.Utc);
-                ApplyGrace([new Vector2i(package.ReadInt(), package.ReadInt())], expiresAt);
+                GraceUntilUtc[new Vector2i(package.ReadInt(), package.ReadInt())] = expiresAt;
             }
         }
         catch (Exception ex)

@@ -8,8 +8,8 @@ internal static class ZoneSaviorFeatureBootstrap
     public static void Initialize(ManualLogSource logger)
     {
         ZoneSaviorInputBlockers.Initialize(logger);
-        ZoneLimitConfiguration.Initialize(ZoneSaviorPlugin.ConfigSync, logger);
         ZonePieceCounter.Initialize(logger);
+        ZoneLimitConfiguration.Initialize(ZoneSaviorPlugin.ConfigSync, logger);
         ZoneBundleCommands.Initialize(logger);
         ZoneBundleSupportGrace.Initialize(logger);
         AutoArchiveStore.Initialize(logger);
@@ -33,11 +33,6 @@ internal static class ZoneSaviorFeatureBootstrap
         AutoArchiveService.Update();
         ZoneBoundaryOverlay.Update();
         AdminTerrainTool.Update();
-    }
-
-    public static void LateUpdate()
-    {
-        AdminTerrainTool.LateUpdate();
     }
 
     public static void Shutdown()

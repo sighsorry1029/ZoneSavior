@@ -88,11 +88,10 @@ internal static partial class AdminTerrainTool
         EnsureRegistered();
         AdminTerrainInfinityHammerCompat.Update();
         UpdatePlacementSizingInput();
-    }
-
-    public static void LateUpdate()
-    {
-        UpdatePlacementPreview();
+        if (!Player.m_localPlayer)
+        {
+            HideAreaLine();
+        }
     }
 
     public static void InitializeCompat(Harmony harmony)
@@ -237,7 +236,7 @@ internal static partial class AdminTerrainTool
             {
                 zdo.SetPosition(proxy.transform.position);
                 zdo.SetRotation(proxy.transform.rotation);
-                WriteCurrentSettings(zdo);
+                WriteSettings(zdo, CurrentSettings());
             }
         }
 
@@ -252,7 +251,13 @@ internal static partial class AdminTerrainTool
         TerrainProxySettings settings = CurrentSettings();
 
         int terrainCompilers = ResetTerrain(position, rotation, settings);
-        int removed = ResetIntersectingProxyObjects(position, rotation, settings, placedView, out int proxyTerrainCompilers);
+        int removed = ResetIntersectingProxyObjects(
+            position,
+            rotation,
+            settings,
+            placedView,
+            IsProxyObject,
+            out int proxyTerrainCompilers);
         terrainCompilers += proxyTerrainCompilers;
         ShowMessage($"ZoneSavior terrain reset {terrainCompilers} terrain compiler(s), removed {removed} terrain proxy object(s).");
         proxy.QueueDestroy();
@@ -265,7 +270,13 @@ internal static partial class AdminTerrainTool
         TerrainProxySettings settings = CurrentPaintSettings();
 
         int terrainCompilers = ResetTerrain(position, rotation, settings);
-        int removed = ResetIntersectingPaintProxyObjects(position, rotation, settings, placedView, out int proxyTerrainCompilers);
+        int removed = ResetIntersectingProxyObjects(
+            position,
+            rotation,
+            settings,
+            placedView,
+            IsPaintProxyObject,
+            out int proxyTerrainCompilers);
         terrainCompilers += proxyTerrainCompilers;
         ShowMessage($"ZoneSavior paint reset {terrainCompilers} terrain compiler(s), removed {removed} paint proxy object(s).");
         proxy.QueueDestroy();
@@ -419,13 +430,8 @@ internal static partial class AdminTerrainTool
     {
         return player != null &&
                player == Player.m_localPlayer &&
-               IsDebugModeEnabled() &&
+               Player.m_debugMode &&
                IsAdmin();
-    }
-
-    private static bool IsDebugModeEnabled()
-    {
-        return Player.m_debugMode;
     }
 
     private static bool IsAdmin()
@@ -447,11 +453,6 @@ internal static partial class AdminTerrainTool
     private static bool HasStoredSettings(ZDO zdo)
     {
         return zdo.GetInt(VersionHash, 0) == DataVersion;
-    }
-
-    private static void WriteCurrentSettings(ZDO zdo)
-    {
-        WriteSettings(zdo, CurrentSettings());
     }
 
     private static TerrainProxySettings SlopeSettings(SlopePlacement placement)

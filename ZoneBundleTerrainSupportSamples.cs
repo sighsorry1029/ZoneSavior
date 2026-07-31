@@ -3,7 +3,6 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
-using static ZoneSavior.ZoneBundleTerrainGrid;
 
 namespace ZoneSavior;
 
@@ -373,7 +372,22 @@ internal static partial class ZoneBundleTerrain
     private static bool TryReadSupportWearNTear(ZDO zdo, Vector2i zone, ZoneBundleWearNTearSaveMode saveMode, out GameObject prefab)
     {
         prefab = null!;
-        if (zdo == null || !zdo.IsValid() || ZoneSystem.GetZone(zdo.GetPosition()) != zone)
+        if (zdo == null || !zdo.IsValid())
+        {
+            return false;
+        }
+
+        prefab = ZNetScene.instance.GetPrefab(zdo.GetPrefab());
+        return IsSupportWearNTear(zdo, zone, saveMode, prefab);
+    }
+
+    private static bool IsSupportWearNTear(
+        ZDO zdo,
+        Vector2i zone,
+        ZoneBundleWearNTearSaveMode saveMode,
+        GameObject prefab)
+    {
+        if (ZoneSystem.GetZone(zdo.GetPosition()) != zone)
         {
             return false;
         }
@@ -383,7 +397,6 @@ internal static partial class ZoneBundleTerrain
             return false;
         }
 
-        prefab = ZNetScene.instance.GetPrefab(zdo.GetPrefab());
         return prefab && prefab.GetComponent<WearNTear>() != null;
     }
 

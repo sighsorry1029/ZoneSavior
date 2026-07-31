@@ -187,9 +187,16 @@ internal static class AutoArchiveStore
 
             if (playerId != 0)
             {
+                PlayerActivityRecord? duplicate = PlayersById.TryGetValue(playerId, out PlayerActivityRecord indexedById)
+                    ? indexedById
+                    : null;
                 AddDistinct(record.PlayerIds, playerId);
                 PlayersById[playerId] = record;
-                MergePlayerIdRecords(record, playerId);
+                if (duplicate != null && duplicate != record)
+                {
+                    MergePlayerRecords(record, duplicate);
+                    RebuildPlayerIndexes();
+                }
             }
 
             _dirty = true;
@@ -282,14 +289,17 @@ internal static class AutoArchiveStore
             return result;
         }
 
-        if (ZoneLimitConfiguration.IsArchiveProtected(playerId, out string protectionReason))
+        bool recordedInActivity = TryGetPlayerRecord(playerId, out PlayerActivityRecord record);
+        string platformId = recordedInActivity ? record.PlatformId : "";
+        IEnumerable<string> names = recordedInActivity ? record.Names.ToList() : [];
+        if (ZoneLimitConfiguration.IsArchiveProtected(playerId, platformId, names, out string protectionReason))
         {
             result.Protected = true;
             result.Reason = protectionReason;
             return result;
         }
 
-        if (!TryGetPlayerRecord(playerId, out PlayerActivityRecord record))
+        if (!recordedInActivity)
         {
             result.PlatformId = UnknownPlatformId(playerId);
             result.Names = string.IsNullOrWhiteSpace(observedName) ? ["not_recorded_in_activity"] : [observedName.Trim()];
@@ -420,31 +430,24 @@ internal static class AutoArchiveStore
         return true;
     }
 
-    private static void MergePlayerIdRecords(PlayerActivityRecord target, long playerId)
+    private static void MergePlayerRecords(PlayerActivityRecord target, PlayerActivityRecord duplicate)
     {
-        foreach (PlayerActivityRecord duplicate in State.Players
-                     .Where(player => player != target && player.PlayerIds.Contains(playerId))
-                     .ToList())
+        foreach (long id in duplicate.PlayerIds)
         {
-            foreach (long id in duplicate.PlayerIds)
-            {
-                AddDistinct(target.PlayerIds, id);
-            }
-
-            foreach (string name in duplicate.Names)
-            {
-                AddDistinct(target.Names, name);
-            }
-
-            if (duplicate.LastSeenUtc > target.LastSeenUtc)
-            {
-                target.LastSeenUtc = duplicate.LastSeenUtc;
-            }
-
-            State.Players.Remove(duplicate);
+            AddDistinct(target.PlayerIds, id);
         }
 
-        RebuildPlayerIndexes();
+        foreach (string name in duplicate.Names)
+        {
+            AddDistinct(target.Names, name);
+        }
+
+        if (duplicate.LastSeenUtc > target.LastSeenUtc)
+        {
+            target.LastSeenUtc = duplicate.LastSeenUtc;
+        }
+
+        State.Players.Remove(duplicate);
     }
 
     private static void RebuildPlayerIndexes()
@@ -458,12 +461,57 @@ internal static class AutoArchiveStore
 
     private static void ReplaceState(AutoArchiveState state)
     {
+        NormalizePlayerRecords(state);
         BuildPlayerIndexes(
             state,
             out Dictionary<string, PlayerActivityRecord> playersByPlatform,
             out Dictionary<long, PlayerActivityRecord> playersById);
         State = state;
         ReplaceIndexes(playersByPlatform, playersById);
+    }
+
+    private static void NormalizePlayerRecords(AutoArchiveState state)
+    {
+        bool merged;
+        do
+        {
+            merged = false;
+            for (int targetIndex = 0; targetIndex < state.Players.Count && !merged; targetIndex++)
+            {
+                PlayerActivityRecord target = state.Players[targetIndex];
+                for (int duplicateIndex = targetIndex + 1; duplicateIndex < state.Players.Count; duplicateIndex++)
+                {
+                    PlayerActivityRecord duplicate = state.Players[duplicateIndex];
+                    if (!target.PlayerIds.Any(id => id != 0L && duplicate.PlayerIds.Contains(id)))
+                    {
+                        continue;
+                    }
+
+                    bool preferDuplicate = GetPlatformIdentityPriority(duplicate) >
+                                           GetPlatformIdentityPriority(target);
+                    PlayerActivityRecord canonical = preferDuplicate ? duplicate : target;
+                    PlayerActivityRecord other = preferDuplicate ? target : duplicate;
+                    foreach (long id in other.PlayerIds)
+                    {
+                        AddDistinct(canonical.PlayerIds, id);
+                    }
+
+                    foreach (string name in other.Names)
+                    {
+                        AddDistinct(canonical.Names, name);
+                    }
+
+                    if (other.LastSeenUtc > canonical.LastSeenUtc)
+                    {
+                        canonical.LastSeenUtc = other.LastSeenUtc;
+                    }
+
+                    state.Players.RemoveAt(preferDuplicate ? targetIndex : duplicateIndex);
+                    merged = true;
+                    break;
+                }
+            }
+        } while (merged);
     }
 
     private static void BuildPlayerIndexes(
@@ -531,6 +579,16 @@ internal static class AutoArchiveStore
     private static bool IsUnknown(PlayerActivityRecord record)
     {
         return record.PlatformId.StartsWith(UnknownPlatformPrefix, StringComparison.Ordinal);
+    }
+
+    private static int GetPlatformIdentityPriority(PlayerActivityRecord record)
+    {
+        if (ZoneSaviorSteamIds.TryNormalizePlatformId(record.PlatformId, out _))
+        {
+            return 2;
+        }
+
+        return string.IsNullOrWhiteSpace(record.PlatformId) || IsUnknown(record) ? 0 : 1;
     }
 
     private static bool TryReadStateFromDisk(out AutoArchiveState state, out string error)

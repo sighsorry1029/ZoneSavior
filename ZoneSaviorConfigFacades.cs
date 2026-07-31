@@ -34,7 +34,7 @@ internal static class GeneralConfig
     private static ConfigEntry<ZoneSaviorPlugin.Toggle> _serverConfigLocked = null!;
     private static ConfigEntry<ZoneSaviorPlugin.Toggle> _zoneWearNTearLimit = null!;
 
-    public static bool ZoneWearNTearLimitEnabled => _zoneWearNTearLimit.Value.IsOn();
+    public static bool ZoneWearNTearLimitEnabled => _zoneWearNTearLimit.Value == ZoneSaviorPlugin.Toggle.On;
 
     public static void Bind(ZoneSaviorPlugin plugin)
     {
@@ -147,8 +147,8 @@ internal static class AutoArchiveConfig
 
     public static bool Enabled => ScanIntervalMinutes > 0;
     public static int InactiveDays => Mathf.Clamp(_inactiveDays.Value, 0, 3650);
-    public static bool DryRun => _dryRun.Value.IsOn();
-    public static bool ResetAfterSave => _resetAfterSave.Value.IsOn();
+    public static bool DryRun => _dryRun.Value == ZoneSaviorPlugin.Toggle.On;
+    public static bool ResetAfterSave => _resetAfterSave.Value == ZoneSaviorPlugin.Toggle.On;
     public static int MinimumPiecesPerCluster => Mathf.Clamp(_minimumPiecesPerCluster.Value, 1, 10000);
     public static int MaxZonesPerRun => Mathf.Clamp(_maxZonesPerRun.Value, 1, 10000);
     public static int ScanIntervalMinutes => Mathf.Clamp(_scanIntervalMinutes.Value, 0, 525600);

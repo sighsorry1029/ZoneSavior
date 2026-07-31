@@ -24,7 +24,16 @@ internal static partial class ZoneBundleCommands
             yield break;
         }
 
+        if (manifest.Bundles.Count == 0)
+        {
+            onComplete(ZoneBundleCommandResult.Fail($"Manifest for tag '{tag}' contains no zone bundles."));
+            yield break;
+        }
+
         List<LoadWorkItem> work = [];
+        long totalEntries = 0L;
+        long totalTerrainContacts = 0L;
+        long totalDataCharacters = 0L;
         foreach (ZoneBundleManifestEntry entry in manifest.Bundles)
         {
             Vector2i sourceZone = ToVector2i(entry.Zone);
@@ -32,6 +41,18 @@ internal static partial class ZoneBundleCommands
             {
                 _logger.LogError($"Zone bundle async archive restore failed: {bundleReason}");
                 onComplete(ZoneBundleCommandResult.Fail(bundleReason));
+                yield break;
+            }
+
+            if (!TryAddArchiveLoadBudget(
+                    bundle,
+                    ref totalEntries,
+                    ref totalTerrainContacts,
+                    ref totalDataCharacters,
+                    out string budgetError))
+            {
+                _logger.LogError($"Zone bundle async archive restore failed: {budgetError}");
+                onComplete(ZoneBundleCommandResult.Fail(budgetError));
                 yield break;
             }
 
@@ -247,7 +268,7 @@ internal static partial class ZoneBundleCommands
                     continue;
                 }
 
-                if (IsResettableZoneObject(resetObject, zones, protectedCharacterIds))
+                if (!protectedCharacterIds.Contains(resetObject.m_uid))
                 {
                     DataHelper.Destroy(resetObject);
                     removed++;
@@ -279,7 +300,7 @@ internal static partial class ZoneBundleCommands
                 }
 
                 if (!TryCollectResetZoneObject(zdo, zones, seen, out ZDO resetObject) ||
-                    !IsResettableZoneObject(resetObject, zones, protectedCharacterIds) ||
+                    protectedCharacterIds.Contains(resetObject.m_uid) ||
                     !IsCreatorWearNTear(resetObject))
                 {
                     continue;
@@ -305,14 +326,6 @@ internal static partial class ZoneBundleCommands
 
         resetObject = zdo;
         return true;
-    }
-
-    private static bool IsResettableZoneObject(ZDO zdo, HashSet<Vector2i> zones, HashSet<ZDOID> protectedCharacterIds)
-    {
-        return zdo != null
-               && zdo.IsValid()
-               && !protectedCharacterIds.Contains(zdo.m_uid)
-               && zones.Contains(ZoneSystem.GetZone(zdo.GetPosition()));
     }
 
     private static bool IsCreatorWearNTear(ZDO zdo)

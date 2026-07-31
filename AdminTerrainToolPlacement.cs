@@ -67,18 +67,6 @@ internal static partial class AdminTerrainTool
         DrawCircleLineIfChanged(proxyGhost.transform.position, Quaternion.identity, CurrentCircleRadius());
     }
 
-    private static void UpdatePlacementPreview()
-    {
-        Player player = Player.m_localPlayer;
-        if (!player)
-        {
-            HideAreaLine();
-            return;
-        }
-
-        PreparePlacementGhost(player);
-    }
-
     private static void UpdatePlacementSizingInput()
     {
         Player player = Player.m_localPlayer;
@@ -216,15 +204,10 @@ internal static partial class AdminTerrainTool
     {
         if (shortcut.MainKey == KeyCode.None)
         {
-            return shortcut.Modifiers.All(IsModifierHeld);
+            return shortcut.Modifiers.All(IsKeyHeld);
         }
 
-        return IsKeyHeld(shortcut.MainKey) && shortcut.Modifiers.All(IsModifierHeld);
-    }
-
-    private static bool IsModifierHeld(KeyCode key)
-    {
-        return IsKeyHeld(key);
+        return IsKeyHeld(shortcut.MainKey) && shortcut.Modifiers.All(IsKeyHeld);
     }
 
     private static bool IsKeyHeld(KeyCode key)
@@ -334,29 +317,26 @@ internal static class AdminTerrainToolPlacementWheelPatch
 {
     private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
     {
+        List<CodeInstruction> code = instructions.ToList();
         MethodInfo original = AccessTools.Method(typeof(ZInput), nameof(ZInput.GetMouseScrollWheel));
         MethodInfo replacement = AccessTools.Method(typeof(AdminTerrainTool), nameof(AdminTerrainTool.GetPlacementMouseScrollWheel));
         if (original == null || replacement == null)
         {
-            return instructions;
+            ZoneSaviorPlugin.ZoneSaviorLogger.LogWarning(
+                "ZoneSavior placement wheel patch skipped because a required method could not be resolved.");
+            return code;
         }
 
-        return ReplaceMouseScrollWheel(instructions, original, replacement);
-    }
-
-    private static IEnumerable<CodeInstruction> ReplaceMouseScrollWheel(
-        IEnumerable<CodeInstruction> instructions,
-        MethodInfo original,
-        MethodInfo replacement)
-    {
-        foreach (CodeInstruction instruction in instructions)
+        const int expectedMatches = 1;
+        int matches = code.Count(instruction => instruction.Calls(original));
+        if (matches != expectedMatches)
         {
-            if (instruction.Calls(original))
-            {
-                instruction.operand = replacement;
-            }
-
-            yield return instruction;
+            ZoneSaviorPlugin.ZoneSaviorLogger.LogWarning(
+                $"ZoneSavior placement wheel patch expected {expectedMatches} mouse wheel call but found {matches}; leaving original IL unchanged.");
+            return code;
         }
+
+        code.Single(instruction => instruction.Calls(original)).operand = replacement;
+        return code;
     }
 }

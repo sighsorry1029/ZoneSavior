@@ -36,11 +36,7 @@ internal static class ZoneBundleCommandEndpoint
     private static void HandleSaveZoneCommand(Terminal.ConsoleEventArgs args)
     {
         ZoneBundleCommands.EnsureCommandAllowed();
-        ZoneBundleCommandRequest request = ZoneBundleCommands.ParseRequest(
-            args.ArgsAll,
-            ZoneBundleCommands.SaveOperation,
-            requireSingleZone: false,
-            requireTarget: false);
+        ZoneBundleCommandRequest request = ZoneBundleCommands.ParseSaveRequest(args.ArgsAll);
         DispatchRequest(request, args.Context);
     }
 

@@ -10,10 +10,12 @@ namespace ZoneSavior;
 
 [BepInPlugin(ModGUID, ModName, ModVersion)]
 [BepInDependency("sighsorry.VeiledRecipes", BepInDependency.DependencyFlags.SoftDependency)]
-public partial class ZoneSaviorPlugin : BaseUnityPlugin
+[BepInDependency("expand_world_data", BepInDependency.DependencyFlags.SoftDependency)]
+[BepInDependency("infinity_hammer", BepInDependency.DependencyFlags.SoftDependency)]
+public class ZoneSaviorPlugin : BaseUnityPlugin
 {
     internal const string ModName = "ZoneSavior";
-    internal const string ModVersion = "1.2.2";
+    internal const string ModVersion = "1.2.3";
     internal const string Author = "sighsorry";
     internal const string ModGUID = $"{Author}.{ModName}";
     internal const string DataStorageFolder = "ZoneSavior";
@@ -58,27 +60,21 @@ public partial class ZoneSaviorPlugin : BaseUnityPlugin
     public void Awake()
     {
         Instance = this;
-
-        bool saveOnSet = Config.SaveOnConfigSet;
-        Config.SaveOnConfigSet = false;
-
-        BindConfiguration();
-        EnsureDataDirectories();
-        ZoneSaviorFeatureBootstrap.Initialize(ZoneSaviorLogger);
-        _harmony.PatchAll(typeof(ZoneSaviorPlugin).Assembly);
-        ZoneSaviorFeatureBootstrap.InitializeCompat(ZoneSaviorLogger, _harmony);
-        SetupWatchers();
-
-        SaveWithRespectToConfigSet();
-        if (saveOnSet)
+        WithConfigSaveSuppressed(() =>
         {
-            Config.SaveOnConfigSet = true;
-        }
+            BindConfiguration();
+            EnsureDataDirectories();
+            ZoneSaviorFeatureBootstrap.Initialize(ZoneSaviorLogger);
+            _harmony.PatchAll(typeof(ZoneSaviorPlugin).Assembly);
+            ZoneSaviorFeatureBootstrap.InitializeCompat(ZoneSaviorLogger, _harmony);
+            SetupWatchers();
+            Config.Save();
+        });
     }
 
     private void OnDestroy()
     {
-        SaveWithRespectToConfigSet();
+        WithConfigSaveSuppressed(Config.Save);
         ZoneSaviorFeatureBootstrap.Shutdown();
 
         _configWatcher?.Dispose();
@@ -89,11 +85,6 @@ public partial class ZoneSaviorPlugin : BaseUnityPlugin
     private void Update()
     {
         ZoneSaviorFeatureBootstrap.Update();
-    }
-
-    private void LateUpdate()
-    {
-        ZoneSaviorFeatureBootstrap.LateUpdate();
     }
 
     private void BindConfiguration()
@@ -146,7 +137,7 @@ public partial class ZoneSaviorPlugin : BaseUnityPlugin
             }
 
             ZoneSaviorLogger.LogDebug("Reloading configuration...");
-            ReloadConfigFromDisk();
+            WithConfigSaveSuppressed(Config.Reload);
             ZoneSaviorLogger.LogInfo("Configuration reload complete.");
         });
     }
@@ -207,26 +198,18 @@ public partial class ZoneSaviorPlugin : BaseUnityPlugin
         }
     }
 
-    private void SaveWithRespectToConfigSet(bool reload = false)
+    private void WithConfigSaveSuppressed(Action action)
     {
         bool originalSaveOnSet = Config.SaveOnConfigSet;
         Config.SaveOnConfigSet = false;
-
-        if (reload)
+        try
         {
-            Config.Reload();
+            action();
         }
-
-        Config.Save();
-        Config.SaveOnConfigSet = originalSaveOnSet;
-    }
-
-    private void ReloadConfigFromDisk()
-    {
-        bool originalSaveOnSet = Config.SaveOnConfigSet;
-        Config.SaveOnConfigSet = false;
-        Config.Reload();
-        Config.SaveOnConfigSet = originalSaveOnSet;
+        finally
+        {
+            Config.SaveOnConfigSet = originalSaveOnSet;
+        }
     }
 
     internal ConfigEntry<T> config<T>(
@@ -255,17 +238,5 @@ public partial class ZoneSaviorPlugin : BaseUnityPlugin
         bool synchronizedSetting = true)
     {
         return config(group, name, value, new ConfigDescription(description), synchronizedSetting);
-    }
-}
-
-public static class ToggleExtensions
-{
-    extension(ZoneSaviorPlugin.Toggle value)
-    {
-        public bool IsOn()
-        {
-            return value == ZoneSaviorPlugin.Toggle.On;
-        }
-
     }
 }

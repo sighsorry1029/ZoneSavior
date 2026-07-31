@@ -39,11 +39,6 @@ internal static class PlayerActivityTracker
         }
     }
 
-    internal static bool TryGetPeerActivity(ZNetPeer peer, out string platformId, out long playerId, out string name)
-    {
-        return TryGetPeerActivity(peer, requireReady: true, out platformId, out playerId, out name);
-    }
-
     internal static void TrackPeer(ZRpc rpc)
     {
         if (!IsServerReady())
@@ -83,7 +78,7 @@ internal static class PlayerActivityTracker
         }
 
         playerId = TryReadPlayerId(peer.m_characterID);
-        platformId = BuildPlatformId(peer, playerId);
+        platformId = ZonePlayerIdentity.ResolvePeerPlatformId(peer, playerId);
         name = peer.m_playerName;
         return !string.IsNullOrWhiteSpace(platformId) &&
                (requireReady || playerId != 0L || !string.IsNullOrWhiteSpace(name));
@@ -112,11 +107,6 @@ internal static class PlayerActivityTracker
 
         ZDO zdo = ZDOMan.instance.GetZDO(characterId);
         return zdo?.GetLong(ZDOVars.s_playerID, 0L) ?? 0L;
-    }
-
-    private static string BuildPlatformId(ZNetPeer peer, long playerId)
-    {
-        return ZonePlayerIdentity.ResolvePeerPlatformId(peer, playerId);
     }
 
     private static bool IsServerReady()

@@ -91,7 +91,11 @@ internal static class ZoneLimitConfiguration
         return false;
     }
 
-    public static bool IsArchiveProtected(long playerId, out string reason)
+    public static bool IsArchiveProtected(
+        long playerId,
+        string platformId,
+        IEnumerable<string>? playerNames,
+        out string reason)
     {
         reason = "";
         if (playerId == 0)
@@ -105,19 +109,14 @@ internal static class ZoneLimitConfiguration
             return true;
         }
 
-        if (!AutoArchiveStore.TryGetPlayerRecord(playerId, out PlayerActivityRecord record))
-        {
-            return false;
-        }
-
-        if (ZoneSaviorSteamIds.TryNormalizePlatformId(record.PlatformId, out string steamId) &&
+        if (ZoneSaviorSteamIds.TryNormalizePlatformId(platformId, out string steamId) &&
             ProtectedSteamIds.Contains(steamId))
         {
             reason = $"player {playerId} is protected by zones.yml steam_ids";
             return true;
         }
 
-        foreach (string name in record.Names)
+        foreach (string name in playerNames ?? [])
         {
             if (!string.IsNullOrWhiteSpace(name) && ProtectedPlayerNames.Contains(name.Trim()))
             {
@@ -218,7 +217,8 @@ internal static class ZoneLimitConfiguration
 
         if (string.IsNullOrWhiteSpace(yaml))
         {
-            return true;
+            error = "zones.yml version is required.";
+            return false;
         }
 
         ZoneLimitFile? file;
@@ -234,7 +234,16 @@ internal static class ZoneLimitConfiguration
 
         if (file == null)
         {
-            return true;
+            error = "zones.yml version is required.";
+            return false;
+        }
+
+        if (file.Version != ZoneLimitFile.CurrentVersion)
+        {
+            error = file.Version.HasValue
+                ? $"Unsupported zones.yml version {file.Version.Value}; expected {ZoneLimitFile.CurrentVersion}."
+                : "zones.yml version is required.";
+            return false;
         }
 
         if (!ZoneArchiveProtection.TryCreateFromFile(file.ArchiveProtection, out protection, out string protectionError))
@@ -267,14 +276,20 @@ internal static class ZoneLimitConfiguration
                 return false;
             }
 
-            if (rawRule.Limit < 0)
+            if (!rawRule.Limit.HasValue)
+            {
+                error = $"rules[{i}].limit is required.";
+                return false;
+            }
+
+            if (rawRule.Limit.Value < 0)
             {
                 error = $"rules[{i}].limit must be zero or greater.";
                 return false;
             }
 
             bool countCreatorless = rawRule.CountCreatorless ?? defaultCountCreatorless;
-            rules.Add(new ZoneLimitRule(minX, maxX, minZ, maxZ, rawRule.Limit, countCreatorless, rawRule.Name ?? $"rule_{i + 1}"));
+            rules.Add(new ZoneLimitRule(minX, maxX, minZ, maxZ, rawRule.Limit.Value, countCreatorless, rawRule.Name ?? $"rule_{i + 1}"));
         }
 
         return true;
@@ -306,14 +321,12 @@ internal static class ZoneLimitConfiguration
             "# If a zone does not match any rule, it is unlimited.\n" +
             "version: 1\n" +
             "archive_protection:\n" +
-            "  steam_ids:\n" +
-            "    - \"76561198000000000\"\n" +
-            "    - \"76561198000000001\"\n" +
-            "  player_ids:\n" +
-            "    - 123456789\n" +
-            "  player_names:\n" +
-            "    - \"GreatViking\"\n" +
-            "    - \"Xcxcx\"\n" +
+            "  steam_ids: []\n" +
+            "  player_ids: []\n" +
+            "  player_names: []\n" +
+            "  # steam_ids: [\"76561198000000000\"]\n" +
+            "  # player_ids: [123456789]\n" +
+            "  # player_names: [\"GreatViking\"]\n" +
             "defaults:\n" +
             "  count_creatorless: false\n" +
             "rules:\n" +
@@ -331,7 +344,9 @@ internal static class ZoneLimitConfiguration
 
 internal sealed class ZoneLimitFile
 {
-    public int Version { get; set; } = 1;
+    public const int CurrentVersion = 1;
+
+    public int? Version { get; set; }
 
     public ZoneLimitDefaultsFile? Defaults { get; set; }
 
@@ -362,7 +377,7 @@ internal sealed class ZoneLimitRuleFile
 
     public List<int>? Z { get; set; }
 
-    public int Limit { get; set; }
+    public int? Limit { get; set; }
 
     public bool? CountCreatorless { get; set; }
 }

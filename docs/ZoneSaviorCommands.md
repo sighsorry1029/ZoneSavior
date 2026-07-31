@@ -15,7 +15,10 @@ BepInEx/config/ZoneSavior/ZoneBundles/{tag}/
 Each archive folder contains:
 
 - `manifest.yml`
-- one `bundleNNN.zonebundle.yml` file per saved source zone
+- one `bundleNNN_<generation>.zonebundle.yml.gz` file per saved source zone
+
+ZoneSavior compresses and opens bundle files automatically. Console, RCON, and admin-client commands do not require manual extraction.
+Previous manifest and bundle versions, including uncompressed legacy bundle files, are not loaded or converted. If the original world data is still available, create a new archive from the live world with the current version.
 
 ### `zs_savezone`
 
@@ -32,6 +35,8 @@ Examples:
 zs_savezone (-21,-4) test_base
 zs_savezone (-21~-20,-4) old_base
 ```
+
+A manual save command accepts at most 1,024 zones. Targets and vertical offsets are not valid save options.
 
 ### `zs_loadzone`
 
@@ -60,8 +65,8 @@ Notes:
 - `to (x,z)` is the target anchor.
 - If `to (x,z)` is omitted, ZoneSavior uses the local player's current zone. A dedicated server console has no local player, so provide `to (x,z)` there.
 - `offset=Y`, `yoffset=Y`, `y-offset=Y`, `--offset Y`, `--yoffset Y`, and `--y-offset Y` are accepted for vertical offset.
+- `restore` does not accept `to (x,z)` or any vertical offset.
 - ZoneSavior maps the saved archive's minimum source X/Z zone to this target zone and preserves every other manifest zone's relative offset.
-- If `to (x,z)` is omitted, ZoneSavior uses the local player's current zone.
 
 ## Auto Archive Commands
 
@@ -73,6 +78,8 @@ Activity and zone rule files:
 BepInEx/config/ZoneSavior/activity.yml
 BepInEx/config/ZoneSavior/zones.yml
 ```
+
+`zones.yml` must declare `version: 1`, and every zone rule must include an explicit non-negative `limit`.
 
 Mode arguments:
 
@@ -103,7 +110,6 @@ zs_scan steam:76561198000000000 reset
 Notes:
 
 - Steam ID is the intended target format.
-- A short numeric playerID fallback is supported when ZoneSavior has not linked a Steam platform ID yet.
 - If a mode is omitted, the command uses current server config values.
 - Without a Steam ID, inactive-player eligibility, archive protection, and small-cluster rules apply.
 - With a Steam ID, inactive days, archive protection, and minimum cluster size are bypassed for that owner.

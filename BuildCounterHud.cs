@@ -68,7 +68,6 @@ internal sealed class BuildCounterHud : MonoBehaviour
 
     private void Show(string value)
     {
-        EnsureElements();
         if (_text == null || _canvasGroup == null)
         {
             return;

@@ -16,7 +16,9 @@ internal static class ZoneBundleStore
     public static string GetBundlePath(string tag, string generation, int index)
     {
         string safeGeneration = ZoneSaviorPaths.SanitizePathSegment(generation);
-        return Path.Combine(GetTagDirectory(tag), $"bundle{index:D3}_{safeGeneration}.zonebundle.yml");
+        return Path.Combine(
+            GetTagDirectory(tag),
+            $"bundle{index:D3}_{safeGeneration}{ZoneBundleSerialization.BundleFileExtension}");
     }
 
     public static string GetBundlePath(string tag, ZoneBundleManifestEntry entry)
@@ -110,7 +112,10 @@ internal static class ZoneBundleStore
             .Select(entry => Path.GetFullPath(GetBundlePath(tag, entry)))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
         int failures = 0;
-        foreach (string path in Directory.EnumerateFiles(directory, "*.zonebundle.yml", SearchOption.TopDirectoryOnly))
+        foreach (string path in Directory.EnumerateFiles(
+                     directory,
+                     $"*{ZoneBundleSerialization.BundleFileExtension}",
+                     SearchOption.TopDirectoryOnly))
         {
             string fullPath = Path.GetFullPath(path);
             if (referenced.Contains(fullPath))

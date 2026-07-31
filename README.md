@@ -38,14 +38,16 @@ BepInEx/config/
     ZoneBundles/
       tag_name/
         manifest.yml
-        bundle001_<generation>.zonebundle.yml
+        bundle001_<generation>.zonebundle.yml.gz
 ```
 
 `activity.yml` stores player activity, scan state, and recent scan records. ZoneSavior reloads it conservatively at runtime: broken YAML, dirty runtime state, and active scans are ignored.
 
-`zones.yml` stores zone limits and archive protection rules. Steam IDs are the best long-term protection key; player names are convenient but can change.
+`zones.yml` stores zone limits and archive protection rules. It must declare `version: 1`, and every rule must declare `limit`. Steam IDs are the best long-term protection key; player names are convenient but can change.
 
-`ZoneBundles/<tag>/manifest.yml` records the archive shape. Each `bundleNNN_<generation>.zonebundle.yml` stores one source zone. New bundle files are committed by replacing the manifest only after every zone is saved successfully.
+`ZoneBundles/<tag>/manifest.yml` records the archive shape. Each `bundleNNN_<generation>.zonebundle.yml.gz` stores one source zone as a compact, gzip-compressed YAML bundle. ZoneSavior reads and writes these files directly; no manual extraction is required. New bundle files are committed by replacing the manifest only after every zone is saved successfully.
+
+Previous manifest and bundle versions, including uncompressed legacy zone bundles, are not loaded or converted. If the original world data is still available, create a new archive from the live world with the current ZoneSavior version before restoring it.
 
 `Diagnostics/` contains YAML reports written by `zs_debugzone`.
 
@@ -69,7 +71,7 @@ Config sections:
   - `Inactive Days`: owner inactivity threshold.
   - `Scan Interval Minutes`: automatic scan interval. `0` disables scheduled scans.
   - `Scanner Batch Size`: ZDOs inspected before yielding a frame.
-  - `Max Zones Per Run`: zone limit for one automatic scan.
+  - `Max Zones Per Run`: maximum number of zones reserved for work in one automatic scan. Failed save/reset attempts still consume this budget.
 - `04 - Terrain Tool`
   - `Radius`: default circle radius.
   - `Slope Width`: default slope width.
@@ -145,6 +147,8 @@ zs_savezone (-21,-4) test_base
 zs_savezone (-21~-20,-4) old_base
 ```
 
+A manual save command accepts at most 1,024 zones. `zs_savezone` does not accept a target or vertical offset.
+
 ### `zs_loadzone`
 
 Load a saved tag.
@@ -172,6 +176,7 @@ Notes:
 - `to (x,z)` is the target anchor.
 - If `to (x,z)` is omitted, ZoneSavior uses the local player's current zone.
 - `offset=Y` adds a vertical offset after the support anchor is calculated.
+- `restore` does not accept `to (x,z)` or an offset.
 
 ### `zs_scan`
 

@@ -8,7 +8,9 @@ namespace ZoneSavior;
 
 internal static partial class ZoneBundleCommands
 {
-    private static readonly Regex CommandPattern = new(@"^\s*(\([^)]+\))\s+([^\s]+)(?:\s+to\s+(\([^)]+\)))?\s*$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private const int MaxSaveCommandZoneCount = 1024;
+
+    private static readonly Regex SaveZonePattern = new(@"^\s*(\([^)]+\))\s+([^\s]+)\s*$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex LoadZonePattern = new(@"^\s*([^\s]+)(?:\s+(?:(restore)|source\s+(\([^)]+\))))?(?:\s+to\s+(\([^)]+\)))?\s*$", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex YOffsetEqualsOptionPattern = new(@"(?:^|\s)(?:offset|yoffset|y-offset)\s*=\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))", RegexOptions.Compiled | RegexOptions.IgnoreCase);
     private static readonly Regex YOffsetFlagOptionPattern = new(@"(?:^|\s)--(?:offset|yoffset|y-offset)\s+([+-]?(?:\d+(?:\.\d*)?|\.\d+))", RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -16,7 +18,7 @@ internal static partial class ZoneBundleCommands
 
     internal static ZoneBundleCommandRequest ParseLoadRequest(string argsAll)
     {
-        float yOffset = ExtractYOffsetOption(ref argsAll);
+        float yOffset = ExtractYOffsetOption(ref argsAll, out bool hasYOffset);
 
         Match match = LoadZonePattern.Match(argsAll);
         if (!match.Success)
@@ -29,6 +31,11 @@ internal static partial class ZoneBundleCommands
         if ((restoreOriginal && loadSourceZone) || (restoreOriginal && match.Groups[4].Success))
         {
             throw new InvalidOperationException($"Syntax: {LoadOperation} tag [restore|source (x,z)] [to (x,z)] [offset=Y]");
+        }
+
+        if (restoreOriginal && hasYOffset)
+        {
+            throw new InvalidOperationException($"{LoadOperation} restore does not support an offset because it restores the archived source height.");
         }
 
         Vector2i? sourceZone = loadSourceZone ? ParseSingleZone(match.Groups[3].Value) : null;
@@ -54,37 +61,22 @@ internal static partial class ZoneBundleCommands
         return request;
     }
 
-    internal static ZoneBundleCommandRequest ParseRequest(string argsAll, string operation, bool requireSingleZone, bool requireTarget)
+    internal static ZoneBundleCommandRequest ParseSaveRequest(string argsAll)
     {
-        float yOffset = ExtractYOffsetOption(ref argsAll);
-
-        Match match = CommandPattern.Match(argsAll);
+        Match match = SaveZonePattern.Match(argsAll);
         if (!match.Success)
         {
-            throw new InvalidOperationException(
-                operation switch
-                {
-                    SaveOperation => $"Syntax: {SaveOperation} (x,z) tag or {SaveOperation} (x~x,z~z) tag",
-                    _ => $"Syntax: {LoadOperation} tag [restore|source (x,z)] [to (x,z)] [offset=Y]"
-                });
+            throw new InvalidOperationException($"Syntax: {SaveOperation} (x,z) tag or {SaveOperation} (x~x,z~z) tag");
         }
 
+        ZoneBundleRange sourceRange = ParseZoneRange(match.Groups[1].Value, requireSingleZone: false);
+        ValidateSaveCommandRange(sourceRange);
         ZoneBundleCommandRequest request = new()
         {
-            Operation = operation,
-            SourceRange = ParseZoneRange(match.Groups[1].Value, requireSingleZone),
-            Tag = match.Groups[2].Value,
-            YOffset = yOffset
+            Operation = SaveOperation,
+            SourceRange = sourceRange,
+            Tag = match.Groups[2].Value
         };
-
-        if (match.Groups[3].Success)
-        {
-            request.TargetZone = ToModel(ParseSingleZone(match.Groups[3].Value));
-        }
-        else if (requireTarget)
-        {
-            request.TargetZone = ToModel(GetCurrentPlayerZone());
-        }
 
         return request;
     }
@@ -132,7 +124,7 @@ internal static partial class ZoneBundleCommands
         return first <= second ? (first, second) : (second, first);
     }
 
-    private static float ExtractYOffsetOption(ref string argsAll)
+    private static float ExtractYOffsetOption(ref string argsAll, out bool found)
     {
         Match match = YOffsetEqualsOptionPattern.Match(argsAll);
         if (!match.Success)
@@ -142,13 +134,33 @@ internal static partial class ZoneBundleCommands
 
         if (!match.Success)
         {
+            found = false;
             return 0f;
         }
 
+        found = true;
         float offset = ParseFloat(match.Groups[1].Value);
         argsAll = YOffsetEqualsOptionPattern.Replace(argsAll, " ");
         argsAll = YOffsetFlagOptionPattern.Replace(argsAll, " ").Trim();
         return offset;
+    }
+
+    private static void ValidateSaveCommandRange(ZoneBundleRange? range)
+    {
+        if (range == null || range.MinX > range.MaxX || range.MinZ > range.MaxZ)
+        {
+            throw new InvalidOperationException("Save zone range is invalid.");
+        }
+
+        long width = (long)range.MaxX - range.MinX + 1L;
+        long height = (long)range.MaxZ - range.MinZ + 1L;
+        if (width > MaxSaveCommandZoneCount ||
+            height > MaxSaveCommandZoneCount ||
+            width > MaxSaveCommandZoneCount / height)
+        {
+            throw new InvalidOperationException(
+                $"Save zone range is {width} x {height} zones; the maximum total per command is {MaxSaveCommandZoneCount}.");
+        }
     }
 
     private static void ApplyYOffset(TerrainPlacementContext? context, float yOffset)
@@ -194,11 +206,11 @@ internal static partial class ZoneBundleCommands
 
     private static IEnumerable<Vector2i> EnumerateZones(ZoneBundleRange range)
     {
-        for (int z = range.MinZ; z <= range.MaxZ; z++)
+        for (long z = range.MinZ; z <= range.MaxZ; z++)
         {
-            for (int x = range.MinX; x <= range.MaxX; x++)
+            for (long x = range.MinX; x <= range.MaxX; x++)
             {
-                yield return new Vector2i(x, z);
+                yield return new Vector2i((int)x, (int)z);
             }
         }
     }

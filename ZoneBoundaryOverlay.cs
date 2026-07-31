@@ -285,9 +285,21 @@ internal static class ZoneBoundaryOverlay
             float t = i / (float)SegmentsPerEdge;
             float x = Mathf.Lerp(startX, endX, t);
             float z = Mathf.Lerp(startZ, endZ, t);
-            float y = ZoneToolAim.SampleGroundY(x, z, 0f) + LineHeightOffset;
+            float y = SampleGroundY(x, z, 0f) + LineHeightOffset;
             _line.SetPosition(index++, new Vector3(x, y, z));
         }
+    }
+
+    private static float SampleGroundY(float x, float z, float fallbackY)
+    {
+        if (ZoneSystem.instance == null)
+        {
+            return fallbackY;
+        }
+
+        Vector3 point = new(x, fallbackY, z);
+        ZoneSystem.instance.GetGroundData(ref point, out _, out _, out _, out _);
+        return point.y;
     }
 }
 

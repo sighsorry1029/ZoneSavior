@@ -130,7 +130,6 @@
     <ItemGroup>
         <Compile Include="AutoArchiveCommands.cs"/>
         <Compile Include="AutoArchiveModels.cs"/>
-        <Compile Include="AutoArchiveScanPolicy.cs"/>
         <Compile Include="AutoArchiveScanner.cs"/>
         <Compile Include="AutoArchiveService.cs"/>
         <Compile Include="AutoArchiveStore.cs"/>
@@ -145,8 +144,8 @@
         <Compile Include="AdminTerrainToolPrefabs.cs"/>
         <Compile Include="AdminTerrainToolPreview.cs"/>
         <Compile Include="AdminTerrainToolTerrainApply.cs"/>
-        <Compile Include="AdminTerrainToolTooltip.cs"/>
         <Compile Include="ZoneSaviorAdminTerrainTool.cs"/>
+        <Compile Include="ZoneSaviorCoroutines.cs"/>
         <Compile Include="ZoneSaviorUtilities.cs"/>
         <Compile Include="PlayerActivityTracker.cs"/>
         <Compile Include="Properties\ZoneSaviorAssemblyInfo.cs"/>
@@ -159,7 +158,6 @@
         <Compile Include="ZoneBundleRestoreReset.cs"/>
         <Compile Include="ZoneBundleSerialization.cs"/>
         <Compile Include="ZoneBundleSupportGrace.cs"/>
-        <Compile Include="ZoneBundleTerrainGrid.cs"/>
         <Compile Include="ZoneBundleTerrainSupportSamples.cs"/>
         <Compile Include="ZoneBundleStore.cs"/>
         <Compile Include="ZoneBundleTerrain.cs"/>
@@ -177,7 +175,6 @@
         <Compile Include="ZoneSaviorInputBlockers.cs"/>
         <Compile Include="ZoneSaviorPlugin.cs"/>
         <Compile Include="ZoneTerrainContactSampler.cs"/>
-        <Compile Include="ZoneSaviorToolAim.cs"/>
     </ItemGroup>
     <ItemGroup>
         <None Include="README.md"/>
@@ -214,21 +211,6 @@
             <ThunderstorePackageRoot>$(ProjectDir)Thunderstore</ThunderstorePackageRoot>
             <PackageDir>$(IntermediateOutputPath)Package\$(PackageName)</PackageDir>
         </PropertyGroup>
-    </Target>
-    <Target Name="ILRepacker" AfterTargets="Build">
-        <ItemGroup>
-            <InputAssemblies Include="$(TargetPath)" />
-            <InputAssemblies Include="$(TargetDir)\Libs\ServerSync.dll" />
-            <InputAssemblies Include="$(TargetDir)\YamlDotNet.dll" />
-        </ItemGroup>
-        <ILRepack
-            Parallel="true"
-            Internalize="true"
-            DebugInfo="true"
-            InputAssemblies="@(InputAssemblies)"
-            TargetKind="SameAsPrimaryAssembly"
-            LibraryPath="$(OutputPath)"
-            OutputFile="$(TargetPath)" />
     </Target>
     <Target Name="UpdateManifestVersion" AfterTargets="GetAssemblyVersion" Condition=" ('$(Configuration)|$(Platform)' == 'Release|AnyCPU') And ('$(OS)' == 'Windows_NT') ">
         <Error Text="manifest.json not found in Thunderstore directory." Condition="!Exists('$(ThunderstorePackageRoot)\manifest.json')"/>

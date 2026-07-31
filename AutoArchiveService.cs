@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Globalization;
 using BepInEx.Logging;
 using UnityEngine;
 
@@ -114,24 +115,66 @@ internal static class AutoArchiveService
         _scanRunning = true;
         _logger.LogInfo(
             $"Starting auto archive scan (manual: {options.Manual}, dry run: {options.DryRun}, reset: {options.ResetAfterSave}, targets: {options.TargetPlayerIds.Count}).");
-        _scanCoroutine = ZoneSaviorPlugin.Instance.StartCoroutine(RunScan(options, operationToken));
-        return true;
+        try
+        {
+            _scanCoroutine = ZoneSaviorPlugin.Instance.StartCoroutine(RunScan(options, operationToken));
+            if (_scanCoroutine == null)
+            {
+                throw new InvalidOperationException("Unity did not start the auto archive coroutine.");
+            }
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            ZoneBundleCommands.EndOperation(operationToken);
+            _scanOperationToken = 0;
+            _scanRunning = false;
+            _scanCoroutine = null;
+            _logger.LogError($"Auto archive scan could not start: {ex}");
+            try
+            {
+                AutoArchiveStore.RecordRun(CreateFailedRun(
+                    options,
+                    DateTime.UtcNow,
+                    $"Auto archive scan could not start: {ex.Message}"));
+                AutoArchiveStore.Flush(force: true);
+            }
+            catch (Exception persistenceException)
+            {
+                _logger.LogError($"Failed to record auto archive start failure: {persistenceException}");
+            }
+
+            return false;
+        }
     }
 
     private static IEnumerator RunScan(AutoArchiveScanOptions options, int operationToken)
     {
         ArchiveRunRecord? completed = null;
+        Exception? failure = null;
         try
         {
-            yield return AutoArchiveScanner.Run(options, run => completed = run);
+            yield return ZoneSaviorCoroutines.RunSafely(
+                AutoArchiveScanner.Run(options, run => completed = run),
+                exception => failure = exception);
 
-            if (completed != null)
+            if (failure != null || completed == null)
             {
-                AutoArchiveStore.RecordRun(completed);
-                AutoArchiveStore.Flush(force: true);
-                _logger.LogInfo(
-                    $"Auto archive scan finished: {completed.CandidateZones} candidate zone(s), {completed.ProcessedZones} processed zone(s), {completed.Clusters.Count} cluster record(s).");
+                DateTime failedAt = DateTime.UtcNow;
+                string failureMessage = failure != null
+                    ? $"Auto archive scan failed: {failure.Message}"
+                    : "Auto archive scanner did not return a result.";
+                completed = CreateFailedRun(options, failedAt, failureMessage);
+                _logger.LogError(failure != null
+                    ? $"Auto archive scan failed unexpectedly: {failure}"
+                    : failureMessage);
             }
+
+            AutoArchiveStore.RecordRun(completed);
+            AutoArchiveStore.Flush(force: true);
+            _logger.LogInfo(
+                $"Auto archive scan finished: {completed.CandidateZones} candidate zone(s), {completed.ProcessedZones} processed zone(s), {completed.Clusters.Count} cluster record(s).");
         }
         finally
         {
@@ -144,6 +187,23 @@ internal static class AutoArchiveService
             _scanRunning = false;
             _scanCoroutine = null;
         }
+    }
+
+    private static ArchiveRunRecord CreateFailedRun(
+        AutoArchiveScanOptions options,
+        DateTime failedAt,
+        string failureMessage)
+    {
+        return new ArchiveRunRecord
+        {
+            RunId = failedAt.ToString("yyyyMMdd_HHmmss", CultureInfo.InvariantCulture),
+            CreatedUtc = failedAt,
+            Manual = options.Manual,
+            DryRun = options.DryRun,
+            ResetAfterSave = options.ResetAfterSave,
+            TargetPlayerIds = new List<long>(options.TargetPlayerIds),
+            Messages = [failureMessage]
+        };
     }
 
     private static bool IsServerReady()

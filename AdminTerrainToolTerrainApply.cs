@@ -123,6 +123,7 @@ internal static partial class AdminTerrainTool
         Quaternion rotation,
         TerrainProxySettings settings,
         ZNetView? placedView,
+        Func<GameObject, bool> isCandidate,
         out int terrainCompilers)
     {
         terrainCompilers = 0;
@@ -136,52 +137,7 @@ internal static partial class AdminTerrainTool
         int removed = 0;
         foreach (ZNetView view in views)
         {
-            if (!view || view == placedView || !IsProxyObject(view.gameObject))
-            {
-                continue;
-            }
-
-            ZDO zdo = view.GetZDO();
-            if (zdo == null || !HasStoredSettings(zdo))
-            {
-                continue;
-            }
-
-            TerrainProxySettings proxySettings = ReadSettings(zdo);
-            Vector3 proxyPosition = view.transform.position;
-            Quaternion proxyRotation = view.transform.rotation;
-            if (!FootprintsIntersect(position, rotation, settings, proxyPosition, proxyRotation, proxySettings))
-            {
-                continue;
-            }
-
-            terrainCompilers += ResetTerrain(proxyPosition, proxyRotation, proxySettings);
-            DestroyProxy(view);
-            removed++;
-        }
-
-        return removed;
-    }
-
-    private static int ResetIntersectingPaintProxyObjects(
-        Vector3 position,
-        Quaternion rotation,
-        TerrainProxySettings settings,
-        ZNetView? placedView,
-        out int terrainCompilers)
-    {
-        terrainCompilers = 0;
-        ZNetScene scene = ZNetScene.instance;
-        if (scene == null)
-        {
-            return 0;
-        }
-
-        List<ZNetView> views = scene.m_instances.Values.ToList();
-        int removed = 0;
-        foreach (ZNetView view in views)
-        {
-            if (!view || view == placedView || !IsPaintProxyObject(view.gameObject))
+            if (!view || view == placedView || !isCandidate(view.gameObject))
             {
                 continue;
             }
@@ -326,24 +282,7 @@ internal static partial class AdminTerrainTool
 
     private static bool ApplyTerrainCompiler(TerrainComp compiler, Vector3 position, Quaternion rotation, TerrainProxySettings settings)
     {
-        if (!compiler.m_nview || !compiler.m_nview.IsValid())
-        {
-            return false;
-        }
-
-        if (!compiler.m_nview.IsOwner())
-        {
-            compiler.m_nview.ClaimOwnership();
-        }
-
-        Heightmap heightmap = compiler.m_hmap;
-        int width = heightmap.m_width + 1;
-        int count = width * width;
-        if (compiler.m_modifiedHeight.Length != count ||
-            compiler.m_levelDelta.Length != count ||
-            compiler.m_smoothDelta.Length != count ||
-            compiler.m_modifiedPaint.Length != count ||
-            compiler.m_paintMask.Length != count)
+        if (!TryPrepareTerrainCompiler(compiler, out Heightmap heightmap, out int width))
         {
             return false;
         }
@@ -383,34 +322,13 @@ internal static partial class AdminTerrainTool
             return false;
         }
 
-        compiler.m_operations++;
-        compiler.m_lastOpPoint = position;
-        compiler.m_lastOpRadius = settings.SearchRadius;
-        compiler.Save();
-        heightmap.Poke(delayed: false);
+        CommitTerrainCompiler(compiler, heightmap, position, settings.SearchRadius);
         return true;
     }
 
     private static bool ResetTerrainCompiler(TerrainComp compiler, Vector3 position, Quaternion rotation, TerrainProxySettings settings)
     {
-        if (!compiler.m_nview || !compiler.m_nview.IsValid())
-        {
-            return false;
-        }
-
-        if (!compiler.m_nview.IsOwner())
-        {
-            compiler.m_nview.ClaimOwnership();
-        }
-
-        Heightmap heightmap = compiler.m_hmap;
-        int width = heightmap.m_width + 1;
-        int count = width * width;
-        if (compiler.m_modifiedHeight.Length != count ||
-            compiler.m_levelDelta.Length != count ||
-            compiler.m_smoothDelta.Length != count ||
-            compiler.m_modifiedPaint.Length != count ||
-            compiler.m_paintMask.Length != count)
+        if (!TryPrepareTerrainCompiler(compiler, out Heightmap heightmap, out int width))
         {
             return false;
         }
@@ -459,12 +377,45 @@ internal static partial class AdminTerrainTool
             return false;
         }
 
+        CommitTerrainCompiler(compiler, heightmap, position, settings.SearchRadius);
+        return true;
+    }
+
+    private static bool TryPrepareTerrainCompiler(TerrainComp compiler, out Heightmap heightmap, out int width)
+    {
+        heightmap = null!;
+        width = 0;
+        if (!compiler.m_nview || !compiler.m_nview.IsValid() || !compiler.m_hmap)
+        {
+            return false;
+        }
+
+        if (!compiler.m_nview.IsOwner())
+        {
+            compiler.m_nview.ClaimOwnership();
+        }
+
+        heightmap = compiler.m_hmap;
+        width = heightmap.m_width + 1;
+        int count = width * width;
+        return compiler.m_modifiedHeight.Length == count &&
+               compiler.m_levelDelta.Length == count &&
+               compiler.m_smoothDelta.Length == count &&
+               compiler.m_modifiedPaint.Length == count &&
+               compiler.m_paintMask.Length == count;
+    }
+
+    private static void CommitTerrainCompiler(
+        TerrainComp compiler,
+        Heightmap heightmap,
+        Vector3 position,
+        float radius)
+    {
         compiler.m_operations++;
         compiler.m_lastOpPoint = position;
-        compiler.m_lastOpRadius = settings.SearchRadius;
+        compiler.m_lastOpRadius = radius;
         compiler.Save();
         heightmap.Poke(delayed: false);
-        return true;
     }
 
     private static bool TryGetHeightmapIndexRange(
@@ -589,28 +540,35 @@ internal static class AdminTerrainToolTerrainCompPatch
 {
     private static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
     {
+        List<CodeInstruction> code = instructions.ToList();
         MethodInfo limit = AccessTools.Method(typeof(AdminTerrainTool), nameof(AdminTerrainTool.GetTerrainCompHeightClampLimit));
         if (limit == null)
         {
-            return instructions;
+            ZoneSaviorPlugin.ZoneSaviorLogger.LogWarning(
+                "ZoneSavior terrain clamp patch skipped because the replacement method could not be resolved.");
+            return code;
         }
 
-        return ReplaceVanillaTerrainCompClamp(instructions, limit);
-    }
-
-    private static IEnumerable<CodeInstruction> ReplaceVanillaTerrainCompClamp(IEnumerable<CodeInstruction> instructions, MethodInfo limit)
-    {
-        foreach (CodeInstruction instruction in instructions)
-        {
-            if (instruction.opcode == OpCodes.Ldc_R4 &&
+        const int expectedMatches = 2;
+        List<CodeInstruction> matches = code
+            .Where(instruction =>
+                instruction.opcode == OpCodes.Ldc_R4 &&
                 instruction.operand is float value &&
                 Math.Abs(value - 8f) < 0.001f)
-            {
-                instruction.opcode = OpCodes.Call;
-                instruction.operand = limit;
-            }
-
-            yield return instruction;
+            .ToList();
+        if (matches.Count != expectedMatches)
+        {
+            ZoneSaviorPlugin.ZoneSaviorLogger.LogWarning(
+                $"ZoneSavior terrain clamp patch expected {expectedMatches} clamp constants but found {matches.Count}; leaving original IL unchanged.");
+            return code;
         }
+
+        foreach (CodeInstruction instruction in matches)
+        {
+            instruction.opcode = OpCodes.Call;
+            instruction.operand = limit;
+        }
+
+        return code;
     }
 }

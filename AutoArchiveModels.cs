@@ -115,28 +115,6 @@ internal sealed class AutoArchiveCreatorEligibility
     public string Reason { get; set; } = "";
 }
 
-internal sealed class ZoneBundleArchiveResult
-{
-    public bool Success { get; set; }
-    public string Message { get; set; } = "";
-    public string Tag { get; set; } = "";
-    public string ManifestPath { get; set; } = "";
-    public int ZoneCount { get; set; }
-    public int EntryCount { get; set; }
-    public int MonsterCount { get; set; }
-    public int TerrainLoaded { get; set; }
-    public int TerrainCaptured { get; set; }
-}
-
-internal sealed class ZoneBundleResetResult
-{
-    public bool Success { get; set; }
-    public string Message { get; set; } = "";
-    public int ZoneCount { get; set; }
-    public int RemovedCount { get; set; }
-    public int RemainingWearNTearCount { get; set; }
-}
-
 internal sealed class AutoArchiveZoneDebugReport
 {
     public int Version { get; set; } = 1;
@@ -145,7 +123,7 @@ internal sealed class AutoArchiveZoneDebugReport
     public ZoneBundleZone Zone { get; set; } = new();
     public AutoArchiveZoneDebugSettings Settings { get; set; } = new();
     public AutoArchiveZoneDebugSummary Summary { get; set; } = new();
-    public List<AutoArchiveZoneDebugCreator> Creators { get; set; } = [];
+    public List<AutoArchiveCreatorEligibility> Creators { get; set; } = [];
     public Dictionary<string, int> ExclusionCounts { get; set; } = [];
     public List<AutoArchiveZoneDebugObject> Objects { get; set; } = [];
 }
@@ -169,18 +147,6 @@ internal sealed class AutoArchiveZoneDebugSummary
     public int CandidateCreators { get; set; }
     public bool ObjectDbReady { get; set; }
     public bool WouldBeCandidateZone { get; set; }
-    public string Reason { get; set; } = "";
-}
-
-internal sealed class AutoArchiveZoneDebugCreator
-{
-    public long PlayerId { get; set; }
-    public string PlatformId { get; set; } = "";
-    public List<string> Names { get; set; } = [];
-    public bool RecordedInActivity { get; set; }
-    public bool UnknownActivityRecord { get; set; }
-    public bool Protected { get; set; }
-    public bool Eligible { get; set; }
     public string Reason { get; set; } = "";
 }
 

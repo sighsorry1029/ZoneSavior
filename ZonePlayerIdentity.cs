@@ -15,7 +15,14 @@ internal static class ZonePlayerIdentity
         string host = peer.m_socket?.GetHostName() ?? "";
         if (!string.IsNullOrWhiteSpace(host))
         {
-            return NormalizePlatformId(ZNet.m_onlineBackend == OnlineBackendType.Steamworks ? $"steam:{host}" : host);
+            string normalizedHost = NormalizePlatformId(host);
+            if (ZNet.m_onlineBackend == OnlineBackendType.Steamworks &&
+                !normalizedHost.StartsWith("steam:", StringComparison.OrdinalIgnoreCase))
+            {
+                return $"steam:{normalizedHost}";
+            }
+
+            return normalizedHost;
         }
 
         return $"session:{peer.m_uid}";

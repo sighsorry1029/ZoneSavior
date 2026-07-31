@@ -23,6 +23,9 @@ internal static partial class ZoneBundleCommands
     private const int CaptureBatchSize = 1000;
     private const int ResetBatchSize = 1000;
     private const int TerrainRecalcBatchSize = 8;
+    private const int MaxArchiveLoadEntryCount = 250000;
+    private const int MaxArchiveLoadTerrainContactCount = 1000000;
+    private const long MaxArchiveLoadDataCharacters = 128L * 1024L * 1024L;
     private const float ClientTerrainApplyTimeoutSeconds = 180f;
     private const float TerrainWitnessSearchRadius = 160f;
 
@@ -85,9 +88,10 @@ internal static partial class ZoneBundleCommands
             return;
         }
 
+        ZoneBundleClientTerrainApplyRequest? request = null;
         try
         {
-            ZoneBundleClientTerrainApplyRequest request = ZoneBundleSerialization.Deserialize<ZoneBundleClientTerrainApplyRequest>(package.ReadString());
+            request = ZoneBundleSerialization.Deserialize<ZoneBundleClientTerrainApplyRequest>(package.ReadString());
             if (ZoneSaviorPlugin.Instance == null)
             {
                 SendClientTerrainApplyResponse(sender, new ZoneBundleClientTerrainApplyResponse
@@ -99,11 +103,32 @@ internal static partial class ZoneBundleCommands
                 return;
             }
 
-            ZoneSaviorPlugin.Instance.StartCoroutine(ApplyClientTerrainRequestAsync(sender, request));
+            Coroutine? coroutine = ZoneSaviorPlugin.Instance.StartCoroutine(
+                RunClientTerrainApplyRequestAsync(sender, request));
+            if (coroutine == null)
+            {
+                throw new InvalidOperationException("Unity did not start the client terrain apply coroutine.");
+            }
         }
         catch (Exception ex)
         {
             _logger.LogError($"Zone bundle client terrain RPC failed: {ex}");
+            if (request != null)
+            {
+                try
+                {
+                    SendClientTerrainApplyResponse(sender, new ZoneBundleClientTerrainApplyResponse
+                    {
+                        RequestId = request.RequestId,
+                        Success = false,
+                        Message = $"Client terrain apply could not start: {ex.Message}"
+                    });
+                }
+                catch (Exception responseException)
+                {
+                    _logger.LogError($"Failed to send zone bundle client terrain start failure: {responseException}");
+                }
+            }
         }
     }
 
@@ -227,11 +252,24 @@ internal static partial class ZoneBundleCommands
             return;
         }
 
-        ZoneSaviorPlugin.Instance.StartCoroutine(ExecuteRequestWithOperationAsync(
-            request,
-            onComplete,
-            terrainAssistPeer,
-            operationToken));
+        try
+        {
+            Coroutine? coroutine = ZoneSaviorPlugin.Instance.StartCoroutine(ExecuteRequestWithOperationAsync(
+                request,
+                onComplete,
+                terrainAssistPeer,
+                operationToken));
+            if (coroutine == null)
+            {
+                throw new InvalidOperationException("Unity did not start the zone bundle operation coroutine.");
+            }
+        }
+        catch (Exception ex)
+        {
+            EndOperation(operationToken);
+            _logger.LogError($"Zone bundle operation '{request.Operation}' could not start: {ex}");
+            onComplete(ZoneBundleCommandResult.Fail($"{request.Operation} could not start: {ex.Message}"));
+        }
     }
 
     internal static bool TryBeginOperation(string operation, out int token, out string reason)
@@ -273,27 +311,57 @@ internal static partial class ZoneBundleCommands
         int operationToken)
     {
         ZoneBundleCommandResult result = ZoneBundleCommandResult.Fail($"Unsupported operation '{request.Operation}'.");
+        IEnumerator? operation = null;
+        if (request.Operation == SaveOperation)
+        {
+            operation = ExecuteSaveRequestAsync(request, value => result = value, terrainAssistPeer);
+        }
+        else if (request.Operation == LoadOperation)
+        {
+            operation = ExecuteLoadRequestAsync(request, value => result = value, terrainAssistPeer);
+        }
+
+        Exception? failure = null;
         try
         {
-            if (request.Operation == SaveOperation)
+            if (operation != null)
             {
-                yield return ExecuteSaveRequestAsync(request, value => result = value, terrainAssistPeer);
+                yield return ZoneSaviorCoroutines.RunSafely(operation, exception => failure = exception);
             }
-            else if (request.Operation == LoadOperation)
+
+            if (failure != null)
             {
-                yield return ExecuteLoadRequestAsync(request, value => result = value, terrainAssistPeer);
+                _logger.LogError($"Zone bundle operation '{request.Operation}' failed unexpectedly: {failure}");
+                result = ZoneBundleCommandResult.Fail($"{request.Operation} failed: {failure.Message}");
             }
         }
         finally
         {
             EndOperation(operationToken);
+            onComplete(result);
         }
-
-        onComplete(result);
     }
 
     private static IEnumerator ExecuteSaveRequestAsync(ZoneBundleCommandRequest request, Action<ZoneBundleCommandResult> onComplete, long terrainAssistPeer)
     {
+        try
+        {
+            if (request.TargetZone != null ||
+                request.YOffset != 0f ||
+                request.RestoreOriginal ||
+                request.LoadSourceZone)
+            {
+                throw new InvalidOperationException($"{SaveOperation} does not support a target, offset, or load mode.");
+            }
+
+            ValidateSaveCommandRange(request.SourceRange);
+        }
+        catch (Exception ex)
+        {
+            onComplete(ZoneBundleCommandResult.Fail(ex.Message));
+            yield break;
+        }
+
         ZoneSaviorBuildRecipeRules.RefreshIndex();
         ZoneBundleArchiveResult? archiveResult = null;
         yield return SaveZonesAsync(EnumerateZones(request.SourceRange), request.Tag, result => archiveResult = result, terrainAssistPeer);
@@ -311,6 +379,29 @@ internal static partial class ZoneBundleCommands
 
     private static IEnumerator ExecuteLoadRequestAsync(ZoneBundleCommandRequest request, Action<ZoneBundleCommandResult> onComplete, long terrainAssistPeer)
     {
+        if (float.IsNaN(request.YOffset) || float.IsInfinity(request.YOffset))
+        {
+            onComplete(ZoneBundleCommandResult.Fail("Load offset must be finite."));
+            yield break;
+        }
+
+        if (request.RestoreOriginal &&
+            (request.YOffset != 0f || request.LoadSourceZone || request.TargetZone != null))
+        {
+            onComplete(ZoneBundleCommandResult.Fail(
+                $"{LoadOperation} restore does not support a target, offset, or source-zone mode."));
+            yield break;
+        }
+
+        if (request.LoadSourceZone &&
+            (request.SourceRange == null ||
+             request.SourceRange.MinX != request.SourceRange.MaxX ||
+             request.SourceRange.MinZ != request.SourceRange.MaxZ))
+        {
+            onComplete(ZoneBundleCommandResult.Fail($"{LoadOperation} source mode requires exactly one source zone."));
+            yield break;
+        }
+
         ZoneBundleCommandResult result = ZoneBundleCommandResult.Fail("Load failed before it started.");
         if (request.RestoreOriginal)
         {
@@ -502,6 +593,7 @@ internal static partial class ZoneBundleCommands
         manifestPath = ZoneBundleStore.GetManifestPath(tag);
         return new ZoneBundleManifest
         {
+            Version = ZoneBundleManifest.CurrentVersion,
             Tag = tag,
             World = GetWorldName(),
             SavedAt = ZoneSaviorTimestamp.Now(),
@@ -771,8 +863,8 @@ internal static partial class ZoneBundleCommands
             targetStart = ToVector2i(request.TargetZone!);
             int sourceMinX = sourceZones.Min(zone => zone.x);
             int sourceMinZ = sourceZones.Min(zone => zone.y);
-            offsetX = targetStart.x - sourceMinX;
-            offsetZ = targetStart.y - sourceMinZ;
+            offsetX = checked(targetStart.x - sourceMinX);
+            offsetZ = checked(targetStart.y - sourceMinZ);
         }
         catch (Exception ex)
         {
@@ -782,6 +874,9 @@ internal static partial class ZoneBundleCommands
         }
 
         work = [];
+        long totalEntries = 0L;
+        long totalTerrainContacts = 0L;
+        long totalDataCharacters = 0L;
         foreach (ZoneBundleManifestEntry manifestEntry in manifest.Bundles)
         {
             Vector2i sourceZone = ToVector2i(manifestEntry.Zone);
@@ -792,7 +887,21 @@ internal static partial class ZoneBundleCommands
                 yield break;
             }
 
-            work.Add(CreateLoadWorkItem(sourceZone, offsetX, offsetZ, bundle));
+            if (!TryAddArchiveLoadBudget(
+                    bundle,
+                    ref totalEntries,
+                    ref totalTerrainContacts,
+                    ref totalDataCharacters,
+                    out string budgetError))
+            {
+                _logger.LogError($"Zone bundle async archive load failed: {budgetError}");
+                onComplete(ZoneBundleCommandResult.Fail(budgetError));
+                yield break;
+            }
+
+            work.Add(new LoadWorkItem(
+                new Vector2i(checked(sourceZone.x + offsetX), checked(sourceZone.y + offsetZ)),
+                bundle));
             yield return null;
         }
 
@@ -816,25 +925,30 @@ internal static partial class ZoneBundleCommands
             $"(removed: {totals.Removed}, created: {totals.Created}, terrain: {totals.TerrainApplied}/{work.Count}, mode: SupportFill{terrainPreparation.Describe()}, yOffset: {Round(request.YOffset)})."));
     }
 
-    private static LoadWorkItem CreateLoadWorkItem(Vector2i sourceZone, int offsetX, int offsetZ, ZoneBundleFile bundle)
+    private static bool TryAddArchiveLoadBudget(
+        ZoneBundleFile bundle,
+        ref long totalEntries,
+        ref long totalTerrainContacts,
+        ref long totalDataCharacters,
+        out string error)
     {
-        return new LoadWorkItem(new Vector2i(sourceZone.x + offsetX, sourceZone.y + offsetZ), bundle);
-    }
-
-    private static IEnumerator ValidateLoadReadyAsync(IEnumerable<LoadWorkItem> work, Action<string> onComplete, bool allowClientTerrainApply = false)
-    {
-        foreach (LoadWorkItem item in work.ToList())
+        totalEntries += bundle.Entries.Count;
+        totalTerrainContacts += bundle.TerrainContacts.Count;
+        totalDataCharacters += bundle.Entries.Sum(entry => (long)entry.Data.Length);
+        if (totalEntries <= MaxArchiveLoadEntryCount &&
+            totalTerrainContacts <= MaxArchiveLoadTerrainContactCount &&
+            totalDataCharacters <= MaxArchiveLoadDataCharacters)
         {
-            if (!allowClientTerrainApply && item.RequiresTerrain && !ZoneBundleTerrain.CanApply(item.TargetZone))
-            {
-                onComplete($"Target zone ({item.TargetZone.x},{item.TargetZone.y}) is not loaded for terrain overwrite. Move closer and try again.");
-                yield break;
-            }
-
-            yield return null;
+            error = "";
+            return true;
         }
 
-        onComplete("");
+        error =
+            $"Archive operation exceeds the aggregate limit " +
+            $"(entries: {totalEntries}/{MaxArchiveLoadEntryCount}, " +
+            $"terrain contacts: {totalTerrainContacts}/{MaxArchiveLoadTerrainContactCount}, " +
+            $"entry data characters: {totalDataCharacters}/{MaxArchiveLoadDataCharacters}).";
+        return false;
     }
 
     private static IEnumerator CreateAndValidateTerrainPlacementContextAsync(
@@ -978,13 +1092,11 @@ internal static partial class ZoneBundleCommands
         long terrainAssistPeer,
         Action<TerrainPlacementContext?, TerrainPreparationResult, string> onComplete)
     {
-        string readyError = "";
-        bool allowClientTerrainApply = true;
-        yield return ValidateLoadReadyAsync(work, value => readyError = value, allowClientTerrainApply);
-        if (!string.IsNullOrWhiteSpace(readyError))
+        string prefabError = GetLoadPrefabValidationError(work);
+        if (!string.IsNullOrWhiteSpace(prefabError))
         {
-            _logger.LogError($"{failurePrefix}: {readyError}");
-            onComplete(null, default, readyError);
+            _logger.LogError($"{failurePrefix}: {prefabError}");
+            onComplete(null, default, prefabError);
             yield break;
         }
 
@@ -994,7 +1106,7 @@ internal static partial class ZoneBundleCommands
         {
             terrainContext = context;
             contextError = error;
-        }, validateTargetTerrain: !allowClientTerrainApply, allowEmptySupportRelativeHeights: allowClientTerrainApply && exactSource);
+        }, validateTargetTerrain: false, allowEmptySupportRelativeHeights: exactSource);
         if (!string.IsNullOrWhiteSpace(contextError))
         {
             _logger.LogError($"{failurePrefix}: {contextError}");
@@ -1012,6 +1124,61 @@ internal static partial class ZoneBundleCommands
         }
 
         onComplete(terrainContext, terrainPreparation, "");
+    }
+
+    private static string GetLoadPrefabValidationError(IEnumerable<LoadWorkItem> work)
+    {
+        if (ZNetScene.instance == null)
+        {
+            return "Network scene is not ready. Load aborted before overwriting target zones.";
+        }
+
+        HashSet<string> missingPrefabs = [];
+        HashSet<string> unsupportedPrefabs = [];
+        foreach (LoadWorkItem item in work)
+        {
+            foreach (ZoneBundleEntry entry in item.Bundle.Entries)
+            {
+                GameObject prefab = ZNetScene.instance.GetPrefab(entry.Prefab);
+                if (!prefab)
+                {
+                    missingPrefabs.Add(entry.Prefab);
+                }
+                else if (prefab.GetComponent<ItemDrop>())
+                {
+                    unsupportedPrefabs.Add(entry.Prefab);
+                }
+            }
+        }
+
+        if (missingPrefabs.Count == 0 && unsupportedPrefabs.Count == 0)
+        {
+            return "";
+        }
+
+        List<string> issues = [];
+        if (missingPrefabs.Count > 0)
+        {
+            issues.Add($"Missing {missingPrefabs.Count} prefab(s): {FormatPrefabNames(missingPrefabs)}.");
+        }
+
+        if (unsupportedPrefabs.Count > 0)
+        {
+            issues.Add($"Unsupported ItemDrop prefab(s): {FormatPrefabNames(unsupportedPrefabs)}.");
+        }
+
+        return $"{string.Join(" ", issues)} Load aborted before overwriting target zones.";
+    }
+
+    private static string FormatPrefabNames(IReadOnlyCollection<string> prefabNames)
+    {
+        const int displayedPrefabCount = 8;
+        string displayed = string.Join(", ", prefabNames
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .Take(displayedPrefabCount));
+        return prefabNames.Count > displayedPrefabCount
+            ? $"{displayed} and {prefabNames.Count - displayedPrefabCount} more"
+            : displayed;
     }
 
     private static IEnumerator ApplyLoadWorkAsync(
@@ -1139,32 +1306,36 @@ internal static partial class ZoneBundleCommands
 
         ClientTerrainApplyResponses.Remove(requestId);
         ClientTerrainApplyExpectedPeers[requestId] = terrainAssistPeer;
-        ZPackage package = new();
-        package.Write(ZoneBundleSerialization.Serialize(request));
-        ZRoutedRpc.instance.InvokeRoutedRPC(terrainAssistPeer, ClientTerrainApplyRequestRpcName, package);
-
-        float deadline = Time.realtimeSinceStartup + ClientTerrainApplyTimeoutSeconds;
-        while (Time.realtimeSinceStartup < deadline)
+        try
         {
-            if (ClientTerrainApplyResponses.TryGetValue(requestId, out ZoneBundleClientTerrainApplyResponse response))
+            ZPackage package = new();
+            package.Write(ZoneBundleSerialization.Serialize(request));
+            ZRoutedRpc.instance.InvokeRoutedRPC(terrainAssistPeer, ClientTerrainApplyRequestRpcName, package);
+
+            float deadline = Time.realtimeSinceStartup + ClientTerrainApplyTimeoutSeconds;
+            while (Time.realtimeSinceStartup < deadline)
             {
-                ClientTerrainApplyResponses.Remove(requestId);
-                ClientTerrainApplyExpectedPeers.Remove(requestId);
-                onComplete(response);
-                yield break;
+                if (ClientTerrainApplyResponses.TryGetValue(requestId, out ZoneBundleClientTerrainApplyResponse response))
+                {
+                    onComplete(response);
+                    yield break;
+                }
+
+                yield return null;
             }
 
-            yield return null;
+            onComplete(new ZoneBundleClientTerrainApplyResponse
+            {
+                RequestId = requestId,
+                Success = false,
+                Message = $"Client terrain apply timed out after {ClientTerrainApplyTimeoutSeconds:0} seconds."
+            });
         }
-
-        ClientTerrainApplyResponses.Remove(requestId);
-        ClientTerrainApplyExpectedPeers.Remove(requestId);
-        onComplete(new ZoneBundleClientTerrainApplyResponse
+        finally
         {
-            RequestId = requestId,
-            Success = false,
-            Message = $"Client terrain apply timed out after {ClientTerrainApplyTimeoutSeconds:0} seconds."
-        });
+            ClientTerrainApplyResponses.Remove(requestId);
+            ClientTerrainApplyExpectedPeers.Remove(requestId);
+        }
     }
 
     private static IEnumerator RequestClientTerrainCaptureAsync(
@@ -1195,32 +1366,36 @@ internal static partial class ZoneBundleCommands
 
         ClientTerrainCaptureResponses.Remove(requestId);
         ClientTerrainCaptureExpectedPeers[requestId] = terrainAssistPeer;
-        ZPackage package = new();
-        package.Write(ZoneBundleSerialization.Serialize(request));
-        ZRoutedRpc.instance.InvokeRoutedRPC(terrainAssistPeer, ClientTerrainCaptureRequestRpcName, package);
-
-        float deadline = Time.realtimeSinceStartup + ClientTerrainApplyTimeoutSeconds;
-        while (Time.realtimeSinceStartup < deadline)
+        try
         {
-            if (ClientTerrainCaptureResponses.TryGetValue(requestId, out ZoneBundleClientTerrainCaptureResponse response))
+            ZPackage package = new();
+            package.Write(ZoneBundleSerialization.Serialize(request));
+            ZRoutedRpc.instance.InvokeRoutedRPC(terrainAssistPeer, ClientTerrainCaptureRequestRpcName, package);
+
+            float deadline = Time.realtimeSinceStartup + ClientTerrainApplyTimeoutSeconds;
+            while (Time.realtimeSinceStartup < deadline)
             {
-                ClientTerrainCaptureResponses.Remove(requestId);
-                ClientTerrainCaptureExpectedPeers.Remove(requestId);
-                onComplete(response);
-                yield break;
+                if (ClientTerrainCaptureResponses.TryGetValue(requestId, out ZoneBundleClientTerrainCaptureResponse response))
+                {
+                    onComplete(response);
+                    yield break;
+                }
+
+                yield return null;
             }
 
-            yield return null;
+            onComplete(new ZoneBundleClientTerrainCaptureResponse
+            {
+                RequestId = requestId,
+                Success = false,
+                Message = $"Client terrain capture timed out after {ClientTerrainApplyTimeoutSeconds:0} seconds."
+            });
         }
-
-        ClientTerrainCaptureResponses.Remove(requestId);
-        ClientTerrainCaptureExpectedPeers.Remove(requestId);
-        onComplete(new ZoneBundleClientTerrainCaptureResponse
+        finally
         {
-            RequestId = requestId,
-            Success = false,
-            Message = $"Client terrain capture timed out after {ClientTerrainApplyTimeoutSeconds:0} seconds."
-        });
+            ClientTerrainCaptureResponses.Remove(requestId);
+            ClientTerrainCaptureExpectedPeers.Remove(requestId);
+        }
     }
 
     private static ZoneBundleClientTerrainCaptureResponse CaptureClientTerrainContacts(ZoneBundleClientTerrainCaptureRequest request)
@@ -1254,7 +1429,43 @@ internal static partial class ZoneBundleCommands
         return response;
     }
 
-    private static IEnumerator ApplyClientTerrainRequestAsync(long sender, ZoneBundleClientTerrainApplyRequest request)
+    private static IEnumerator RunClientTerrainApplyRequestAsync(long sender, ZoneBundleClientTerrainApplyRequest request)
+    {
+        ZoneBundleClientTerrainApplyResponse response = new()
+        {
+            RequestId = request.RequestId,
+            Success = false,
+            Message = "Client terrain apply stopped before completion."
+        };
+        Exception? failure = null;
+        try
+        {
+            yield return ZoneSaviorCoroutines.RunSafely(
+                ApplyClientTerrainRequestAsync(request, value => response = value),
+                exception => failure = exception);
+            if (failure != null)
+            {
+                _logger.LogError($"Zone bundle client terrain apply failed unexpectedly: {failure}");
+                response.Success = false;
+                response.Message = $"Client terrain apply failed: {failure.Message}";
+            }
+        }
+        finally
+        {
+            try
+            {
+                SendClientTerrainApplyResponse(sender, response);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError($"Failed to send zone bundle client terrain response: {ex}");
+            }
+        }
+    }
+
+    private static IEnumerator ApplyClientTerrainRequestAsync(
+        ZoneBundleClientTerrainApplyRequest request,
+        Action<ZoneBundleClientTerrainApplyResponse> onComplete)
     {
         ZoneBundleClientTerrainApplyResponse response = new()
         {
@@ -1265,7 +1476,7 @@ internal static partial class ZoneBundleCommands
         {
             response.Success = false;
             response.Message = "Client terrain apply failed: missing terrain context.";
-            SendClientTerrainApplyResponse(sender, response);
+            onComplete(response);
             yield break;
         }
 
@@ -1276,7 +1487,7 @@ internal static partial class ZoneBundleCommands
         {
             response.Success = false;
             response.Message = "Client terrain apply failed: terrain context has no support points or bundle terrain sources.";
-            SendClientTerrainApplyResponse(sender, response);
+            onComplete(response);
             yield break;
         }
 
@@ -1289,7 +1500,7 @@ internal static partial class ZoneBundleCommands
                 {
                     response.Success = false;
                     response.Message = $"Client target zone ({zone.x},{zone.y}) is not loaded for terrain overwrite. Move a ZoneSavior client into the target area and try again.";
-                    SendClientTerrainApplyResponse(sender, response);
+                    onComplete(response);
                     yield break;
                 }
 
@@ -1302,7 +1513,7 @@ internal static partial class ZoneBundleCommands
                 {
                     response.Success = false;
                     response.Message = $"Client target zone ({zone.x},{zone.y}) has no applicable terrain support points.";
-                    SendClientTerrainApplyResponse(sender, response);
+                    onComplete(response);
                     yield break;
                 }
             }
@@ -1310,7 +1521,7 @@ internal static partial class ZoneBundleCommands
             {
                 response.Success = false;
                 response.Message = $"Client terrain validation failed for zone ({zone.x},{zone.y}): {ex.Message}";
-                SendClientTerrainApplyResponse(sender, response);
+                onComplete(response);
                 yield break;
             }
 
@@ -1327,7 +1538,7 @@ internal static partial class ZoneBundleCommands
 
         response.Success = true;
         response.Message = $"Client applied terrain support for {targets.Count} target zone(s).";
-        SendClientTerrainApplyResponse(sender, response);
+        onComplete(response);
     }
 
     private static bool AllRequiredTerrainTargetsCanApply(IEnumerable<LoadWorkItem> work)
@@ -1426,11 +1637,11 @@ internal static partial class ZoneBundleCommands
             return;
         }
 
-        if (!TryGetPeerZoneDistanceSqr(peer, zone, out float distanceSqr))
-        {
-            return;
-        }
-
+        Vector3 peerPosition = peer.m_refPos;
+        Vector3 zoneCenter = ZoneSystem.GetZonePos(zone);
+        float dx = peerPosition.x - zoneCenter.x;
+        float dz = peerPosition.z - zoneCenter.z;
+        float distanceSqr = dx * dx + dz * dz;
         float maxDistanceSqr = TerrainWitnessSearchRadius * TerrainWitnessSearchRadius;
         if (distanceSqr > maxDistanceSqr)
         {
@@ -1438,17 +1649,6 @@ internal static partial class ZoneBundleCommands
         }
 
         candidates.Add(new TerrainWitnessCandidate(peerId, distanceSqr, preferred));
-    }
-
-    private static bool TryGetPeerZoneDistanceSqr(ZNetPeer peer, Vector2i zone, out float distanceSqr)
-    {
-        distanceSqr = float.PositiveInfinity;
-        Vector3 peerPosition = peer.m_refPos;
-        Vector3 zoneCenter = ZoneSystem.GetZonePos(zone);
-        float dx = peerPosition.x - zoneCenter.x;
-        float dz = peerPosition.z - zoneCenter.z;
-        distanceSqr = dx * dx + dz * dz;
-        return true;
     }
 
     private static List<ZoneBundleEntry> CreateTerrainSupportEntries(IEnumerable<ZoneBundleEntry> sourceEntries)
@@ -1502,15 +1702,18 @@ internal static partial class ZoneBundleCommands
         {
             try
             {
-                TryAddBundleEntry(
-                    zdo,
-                    zone,
-                    zoneCenter,
-                    sourceAnchor,
-                    useRelativePlacement,
-                    creatorNames,
-                    ref monsterCount,
-                    zoneEntries);
+                if (TryCreateBundleEntry(
+                        zdo,
+                        zone,
+                        zoneCenter,
+                        sourceAnchor,
+                        useRelativePlacement,
+                        creatorNames,
+                        ref monsterCount,
+                        out ZoneBundleEntry entry))
+                {
+                    zoneEntries.Add(entry);
+                }
             }
             catch (Exception ex)
             {
@@ -1547,33 +1750,6 @@ internal static partial class ZoneBundleCommands
         }
     }
 
-    private static bool TryAddBundleEntry(
-        ZDO zdo,
-        Vector2i zone,
-        Vector3 zoneCenter,
-        ZoneBundleTerrain.TerrainSourceAnchor sourceAnchor,
-        bool useRelativePlacement,
-        Dictionary<long, string> creatorNames,
-        ref int monsterCount,
-        List<ZoneBundleEntry> zoneEntries)
-    {
-        if (!TryCreateBundleEntry(
-                zdo,
-                zone,
-                zoneCenter,
-                sourceAnchor,
-                useRelativePlacement,
-                creatorNames,
-                ref monsterCount,
-                out ZoneBundleEntry entry))
-        {
-            return false;
-        }
-
-        zoneEntries.Add(entry);
-        return true;
-    }
-
     private static bool TryCreateBundleEntry(
         ZDO zdo,
         Vector2i zone,
@@ -1606,7 +1782,7 @@ internal static partial class ZoneBundleCommands
             return false;
         }
 
-        if (!ZoneBundleTerrain.IsSupportWearNTear(zdo, zone, out _) && !tamedMonster)
+        if (!ZoneBundleTerrain.IsSupportWearNTear(zdo, zone, prefab) && !tamedMonster)
         {
             return false;
         }
@@ -1661,6 +1837,7 @@ internal static partial class ZoneBundleCommands
     {
         return new ZoneBundleFile
         {
+            Version = ZoneBundleFile.CurrentVersion,
             Tag = tag,
             SourceBaseY = useRelativePlacement ? sourceAnchor.BaseWorldY : 0f,
             TerrainContactsCaptured = contactsCaptured,

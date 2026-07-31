@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.3
+
+- Breaking: Previous manifest and bundle versions are no longer loaded or converted; `zones.yml` now requires `version: 1` and an explicit non-negative `limit` for every rule.
+- Added strict save/load/restore limits, complete preflight validation, and safer coroutine, RPC, and archive failure cleanup.
+- Simplified auto-archive, terrain-tool, and bundle internals by removing redundant wrappers and co-locating code that changes together.
+
 ## 1.2.2
 
 - Improved SupportFill contact capture with actual collider and mesh support points, preventing invalid lower overlaps from hiding valid terrain contacts.

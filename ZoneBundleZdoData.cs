@@ -118,7 +118,8 @@ internal sealed class ZoneBundleZdoData
     {
         if (!payload.StartsWith(Prefix, StringComparison.Ordinal))
         {
-            throw new InvalidDataException("Unsupported zone bundle ZDO data format. Re-save this bundle with the current ZoneSavior version.");
+            throw new InvalidDataException(
+                "Unsupported zone bundle ZDO data format. Legacy bundles are not converted; create a new archive from the live world with the current ZoneSavior version.");
         }
 
         ZPackage package = new(payload.Substring(Prefix.Length));
@@ -208,21 +209,39 @@ internal static class ZoneBundleZdoHelper
             return;
         }
 
+        List<ZDO> chain = [];
+        HashSet<ZDOID> visited = [];
+        ZDO? current = zdo;
+        while (current != null)
+        {
+            ZDOID currentId = current.m_uid;
+            if (!visited.Add(currentId) || !CanDestroyZdo(currentId))
+            {
+                break;
+            }
+
+            chain.Add(current);
+            ZDOID spawnedConnection = current.GetConnectionZDOID(ZDOExtraData.ConnectionType.Spawned);
+            if (spawnedConnection == ZDOID.None ||
+                !ZDOMan.instance.m_objectsByID.TryGetValue(spawnedConnection, out ZDO connected) ||
+                connected == current)
+            {
+                break;
+            }
+
+            current = connected;
+        }
+
+        for (int index = chain.Count - 1; index >= 0; index--)
+        {
+            DestroySingle(chain[index]);
+        }
+    }
+
+    private static void DestroySingle(ZDO zdo)
+    {
         ZDOID id = zdo.m_uid;
-        if (!CanDestroyZdo(id))
-        {
-            return;
-        }
-
         zdo.SetOwner(ZDOMan.GetSessionID());
-
-        ZDOID spawnedConnection = zdo.GetConnectionZDOID(ZDOExtraData.ConnectionType.Spawned);
-        if (spawnedConnection != ZDOID.None
-            && ZDOMan.instance.m_objectsByID.TryGetValue(spawnedConnection, out ZDO connected)
-            && connected != zdo)
-        {
-            Destroy(connected);
-        }
 
         ZNetScene? scene = ZNetScene.instance;
         if (scene != null)

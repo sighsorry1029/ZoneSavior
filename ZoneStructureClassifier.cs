@@ -94,10 +94,13 @@ internal static class ZoneStructureClassifier
             info.ExclusionReasons.Add("no_player_build_recipe_or_resource_cost");
         }
 
-        info.AutoArchiveCandidatePiece = inRequestedZone &&
-                                         info.CreatorPlayerId != 0L &&
-                                         info.HasWearNTear &&
-                                         info.HasBuildRecipe;
+        bool productionCandidate = TryGetAutoArchiveCandidate(
+            zdo,
+            out Vector2i candidateZone,
+            out _,
+            out _);
+        info.AutoArchiveCandidatePiece = productionCandidate &&
+                                         (requestedZone == null || candidateZone == requestedZone.Value);
         if (info.AutoArchiveCandidatePiece)
         {
             info.ExclusionReasons.Clear();
