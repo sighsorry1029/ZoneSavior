@@ -79,7 +79,7 @@ BepInEx/config/ZoneSavior/activity.yml
 BepInEx/config/ZoneSavior/zones.yml
 ```
 
-`zones.yml` must declare `version: 1`, and every zone rule must include an explicit non-negative `limit`.
+`zones.yml` does not require a version field, but an explicitly declared version must be `1`. Every zone rule must include an explicit non-negative `limit`.
 
 Mode arguments:
 

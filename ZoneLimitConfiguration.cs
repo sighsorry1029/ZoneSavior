@@ -217,7 +217,7 @@ internal static class ZoneLimitConfiguration
 
         if (string.IsNullOrWhiteSpace(yaml))
         {
-            error = "zones.yml version is required.";
+            error = "zones.yml is empty.";
             return false;
         }
 
@@ -234,15 +234,13 @@ internal static class ZoneLimitConfiguration
 
         if (file == null)
         {
-            error = "zones.yml version is required.";
+            error = "zones.yml is empty.";
             return false;
         }
 
-        if (file.Version != ZoneLimitFile.CurrentVersion)
+        if (file.Version.HasValue && file.Version.Value != ZoneLimitFile.CurrentVersion)
         {
-            error = file.Version.HasValue
-                ? $"Unsupported zones.yml version {file.Version.Value}; expected {ZoneLimitFile.CurrentVersion}."
-                : "zones.yml version is required.";
+            error = $"Unsupported zones.yml version {file.Version.Value}; expected {ZoneLimitFile.CurrentVersion}.";
             return false;
         }
 
@@ -319,7 +317,6 @@ internal static class ZoneLimitConfiguration
             "# Rules are evaluated from top to bottom.\n" +
             "# The first matching rule wins.\n" +
             "# If a zone does not match any rule, it is unlimited.\n" +
-            "version: 1\n" +
             "archive_protection:\n" +
             "  steam_ids: []\n" +
             "  player_ids: []\n" +
