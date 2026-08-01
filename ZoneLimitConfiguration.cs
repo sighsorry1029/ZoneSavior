@@ -238,12 +238,6 @@ internal static class ZoneLimitConfiguration
             return false;
         }
 
-        if (file.Version.HasValue && file.Version.Value != ZoneLimitFile.CurrentVersion)
-        {
-            error = $"Unsupported zones.yml version {file.Version.Value}; expected {ZoneLimitFile.CurrentVersion}.";
-            return false;
-        }
-
         if (!ZoneArchiveProtection.TryCreateFromFile(file.ArchiveProtection, out protection, out string protectionError))
         {
             error = $"archive_protection.{protectionError}";
@@ -341,10 +335,6 @@ internal static class ZoneLimitConfiguration
 
 internal sealed class ZoneLimitFile
 {
-    public const int CurrentVersion = 1;
-
-    public int? Version { get; set; }
-
     public ZoneLimitDefaultsFile? Defaults { get; set; }
 
     public ZoneArchiveProtectionFile? ArchiveProtection { get; set; }

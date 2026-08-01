@@ -3,7 +3,7 @@
 ## 1.2.3
 
 - Breaking: Previous manifest and bundle versions are no longer loaded or converted; every `zones.yml` rule now requires an explicit non-negative `limit`.
-- Made the `zones.yml` version field optional while continuing to reject explicitly unsupported versions.
+- Removed `zones.yml` version handling; the current schema is parsed directly and existing version fields are ignored.
 - Added strict save/load/restore limits, complete preflight validation, and safer coroutine, RPC, and archive failure cleanup.
 - Simplified auto-archive, terrain-tool, and bundle internals by removing redundant wrappers and co-locating code that changes together.
 
