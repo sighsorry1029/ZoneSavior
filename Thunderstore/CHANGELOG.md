@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.2.6
+
+- Terrain Reset, Paint Proxy, and Paint Only Reset range outlines now follow the loaded terrain surface; Terrain Proxy retains its flat target-height outline.
+- Reset preflight now detects known intersecting proxy ZDOs whose live objects are not loaded and aborts without changing terrain.
+- Paint grid preview now falls back to the range outline while a required heightmap is still loading.
+
+## 1.2.5
+
+- Breaking: Removed the `ZoneSaviorPaintReset` prefab without a legacy alias; `ZoneSaviorTerrainReset` is now the single reset tool and defaults to resetting both terrain height and paint.
+- Added a terrain-tool modifier-key toggle (Alt by default) for Paint Only Reset mode, including a current-mode tooltip, TopLeft notification, and exact affected-node grid preview.
+- Reset mode returns to Terrain + Paint when the reset tool is deselected or the world is left.
+- Reset now preflights loaded terrain coverage, known intersecting proxy footprints, and ownership before changing terrain or removing proxies, preventing partial mutation when a known requirement is unavailable.
+
+## 1.2.4
+
+- Added an exact affected-node grid preview and circular range outline for directly placed Paint Proxy tools, with an outline-only fallback for very large ranges.
+- Fixed deferred placement ghosts and early location spawning so proxy ZDOs unregister safely and terrain application retries after heightmaps become ready.
+- Fixed terrain-only proxy resets clearing unrelated terrain paint.
+
 ## 1.2.3
 
 - Breaking: Previous manifest and bundle versions are no longer loaded or converted; every `zones.yml` rule now requires an explicit non-negative `limit`.

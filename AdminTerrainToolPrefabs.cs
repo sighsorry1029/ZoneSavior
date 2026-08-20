@@ -29,7 +29,7 @@ internal static partial class AdminTerrainTool
         }
 
         EnsureRegistered();
-        if (!_prefab || !_slopePrefab || !_paintPrefab || !_resetPrefab || !_paintResetPrefab)
+        if (!_prefab || !_slopePrefab || !_paintPrefab || !_resetPrefab)
         {
             return;
         }
@@ -38,7 +38,6 @@ internal static partial class AdminTerrainTool
         AddPieceToTable(table, _prefab);
         AddPieceToTable(table, _slopePrefab);
         AddPieceToTable(table, _paintPrefab);
-        AddPieceToTable(table, _paintResetPrefab);
         AddPieceToTable(table, _resetPrefab);
     }
 
@@ -70,17 +69,11 @@ internal static partial class AdminTerrainTool
             _resetPrefab = CreatePrefab(ResetPrefabName, slope: false, reset: true);
         }
 
-        if (!_paintResetPrefab)
-        {
-            _paintResetPrefab = CreatePrefab(PaintResetPrefabName, slope: false, paintReset: true);
-        }
-
         if (_registeredScene == scene &&
             IsRegistered(scene, PrefabHash) &&
             IsRegistered(scene, SlopePrefabHash) &&
             IsRegistered(scene, PaintPrefabHash) &&
-            IsRegistered(scene, ResetPrefabHash) &&
-            IsRegistered(scene, PaintResetPrefabHash))
+            IsRegistered(scene, ResetPrefabHash))
         {
             return;
         }
@@ -88,7 +81,6 @@ internal static partial class AdminTerrainTool
         RegisterPrefab(scene, PrefabHash, PrefabName, _prefab);
         RegisterPrefab(scene, SlopePrefabHash, SlopePrefabName, _slopePrefab);
         RegisterPrefab(scene, PaintPrefabHash, PaintPrefabName, _paintPrefab);
-        RegisterPrefab(scene, PaintResetPrefabHash, PaintResetPrefabName, _paintResetPrefab);
         RegisterPrefab(scene, ResetPrefabHash, ResetPrefabName, _resetPrefab);
         _registeredScene = scene;
     }
@@ -105,7 +97,6 @@ internal static partial class AdminTerrainTool
             prefabHash == SlopePrefabHash ? _slopePrefab :
             prefabHash == PaintPrefabHash ? _paintPrefab :
             prefabHash == ResetPrefabHash ? _resetPrefab :
-            prefabHash == PaintResetPrefabHash ? _paintResetPrefab :
             null;
     }
 
@@ -133,7 +124,10 @@ internal static partial class AdminTerrainTool
         Piece pieceComponent = prefab.GetComponent<Piece>();
         pieceComponent.m_category = Piece.PieceCategory.Misc;
         pieceComponent.m_clipEverything = true;
-        pieceComponent.m_icon = GetIcon(IsSlopeProxyObject(prefab), IsResetProxyObject(prefab), IsPaintProxyObject(prefab), IsPaintResetProxyObject(prefab));
+        pieceComponent.m_icon = GetIcon(
+            IsSlopeProxyObject(prefab),
+            IsResetProxyObject(prefab),
+            IsPaintProxyObject(prefab));
         pieceComponent.m_description = GetPieceDescription(prefab);
         int category = Mathf.Clamp((int)pieceComponent.m_category, 0, table.m_availablePieces.Count - 1);
         if (category < 0)
@@ -219,7 +213,6 @@ internal static partial class AdminTerrainTool
         UpdatePieceDescription(_prefab);
         UpdatePieceDescription(_slopePrefab);
         UpdatePieceDescription(_paintPrefab);
-        UpdatePieceDescription(_paintResetPrefab);
         UpdatePieceDescription(_resetPrefab);
     }
 
@@ -259,20 +252,17 @@ internal static partial class AdminTerrainTool
                 FormatTerrainToolWheelAction("paint type"));
         }
 
-        if (IsPaintResetProxyObject(prefab))
-        {
-            return string.Join("\n",
-                "Resets terrain paint in this radius and removes intersecting ZoneSavior paint proxies.",
-                "",
-                $"Current radius: {FormatMeters(CurrentCircleRadius())}");
-        }
-
         if (IsResetProxyObject(prefab))
         {
+            bool paintOnly = CurrentTerrainResetScope == TerrainResetScope.PaintOnly;
             return string.Join("\n",
-                "Resets terrain in this radius and removes intersecting ZoneSavior terrain proxies.",
+                paintOnly
+                    ? "Resets only terrain paint in this radius and removes intersecting Paint Proxy objects."
+                    : "Resets terrain height and paint in this radius and removes intersecting terrain, slope, and paint proxies.",
                 "",
-                $"Current radius: {FormatMeters(CurrentCircleRadius())}");
+                $"Current radius: {FormatMeters(CurrentCircleRadius())}",
+                $"Reset mode: {TerrainResetScopeLabel()}",
+                FormatTerrainResetScopeAction());
         }
 
         return string.Join("\n",
@@ -292,8 +282,23 @@ internal static partial class AdminTerrainTool
     {
         string modifier = FormatShortcut(AdminTerrainToolConfig.TerrainToolModifierKey);
         return string.IsNullOrWhiteSpace(modifier)
-            ? $"Wheel: {action}"
+            ? $"Set Terrain Tool Modifier Key to adjust {action}."
             : $"{modifier} + wheel: {action}";
+    }
+
+    private static string FormatTerrainResetScopeAction()
+    {
+        string modifier = FormatShortcut(AdminTerrainToolConfig.TerrainToolModifierKey);
+        return string.IsNullOrWhiteSpace(modifier)
+            ? "Set Terrain Tool Modifier Key to switch reset mode."
+            : $"Press {modifier}: switch reset mode";
+    }
+
+    private static string TerrainResetScopeLabel()
+    {
+        return CurrentTerrainResetScope == TerrainResetScope.PaintOnly
+            ? "Paint Only"
+            : "Terrain + Paint";
     }
 
     private static string FormatShortcut(KeyboardShortcut shortcut)
@@ -324,7 +329,11 @@ internal static partial class AdminTerrainTool
         };
     }
 
-    private static GameObject CreatePrefab(string prefabName, bool slope, bool reset = false, bool paint = false, bool paintReset = false)
+    private static GameObject CreatePrefab(
+        string prefabName,
+        bool slope = false,
+        bool reset = false,
+        bool paint = false)
     {
         GameObject prefab = new(prefabName);
         prefab.SetActive(false);
@@ -337,15 +346,13 @@ internal static partial class AdminTerrainTool
         }
 
         ZNetView nview = prefab.AddComponent<ZNetView>();
-        nview.m_persistent = !(reset || paintReset);
+        nview.m_persistent = !reset;
         nview.m_distant = false;
         nview.m_type = ZDO.ObjectType.Solid;
         nview.m_syncInitialScale = true;
 
         Piece piece = prefab.AddComponent<Piece>();
-        piece.m_name = paintReset
-            ? "ZoneSavior Paint Reset"
-            : paint
+        piece.m_name = paint
             ? "ZoneSavior Paint Proxy"
             : reset
             ? "ZoneSavior Terrain Reset"
@@ -364,7 +371,7 @@ internal static partial class AdminTerrainTool
         piece.m_resources = Array.Empty<Piece.Requirement>();
 
         prefab.AddComponent<ZoneSaviorTerrainProxy>();
-        piece.m_icon = GetIcon(slope, reset, paint, paintReset);
+        piece.m_icon = GetIcon(slope, reset, paint);
         piece.m_description = GetPieceDescription(prefab);
         return prefab;
     }

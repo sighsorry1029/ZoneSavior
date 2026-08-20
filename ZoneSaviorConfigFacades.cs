@@ -258,7 +258,9 @@ internal static class AdminTerrainToolConfig
             ConfigSections.TerrainTool,
             "Terrain Tool Modifier Key",
             new KeyboardShortcut(KeyCode.LeftAlt),
-            ConfigDescriptions.Ordered("Client-only modifier key used with mouse wheel by ZoneSavior terrain tools.", 460),
+            ConfigDescriptions.Ordered(
+                "Client-only modifier key used with the mouse wheel for terrain tool adjustments and pressed to switch Terrain Reset mode.",
+                460),
             synchronizedSetting: false);
     }
 }

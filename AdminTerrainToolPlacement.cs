@@ -16,33 +16,75 @@ internal static partial class AdminTerrainTool
         .OrderBy(value => (int)value)
         .ToArray();
 
-    private static bool TryGetProxyGhost(GameObject ghost, out GameObject proxyGhost)
+    private static bool TryGetDirectProxyGhost(Player player, out GameObject proxyGhost)
     {
         proxyGhost = null!;
-        if (!ghost)
+        GameObject ghost = player ? player.m_placementGhost : null!;
+        GameObject selectedPrefab = player && player.m_buildPieces
+            ? player.m_buildPieces.GetSelectedPrefab()
+            : null!;
+        if (!ghost ||
+            !IsProxyObject(ghost) ||
+            !selectedPrefab ||
+            !(ReferenceEquals(selectedPrefab, _prefab) ||
+              ReferenceEquals(selectedPrefab, _slopePrefab) ||
+              ReferenceEquals(selectedPrefab, _paintPrefab) ||
+              ReferenceEquals(selectedPrefab, _resetPrefab) ||
+              AdminTerrainInfinityHammerCompat.IsDirectMenuSelectionPrefab(selectedPrefab)))
         {
             return false;
         }
 
-        if (IsProxyObject(ghost))
+        proxyGhost = ghost;
+        return true;
+    }
+
+    internal static void RemoveDeferredProxyGhostViews(Player player)
+    {
+        GameObject ghost = player ? player.m_placementGhost : null!;
+        if (!ghost)
         {
-            proxyGhost = ghost;
-            return true;
+            return;
         }
 
-        ZoneSaviorTerrainProxy proxy = ghost.GetComponentInChildren<ZoneSaviorTerrainProxy>(includeInactive: true);
-        if (proxy)
+        foreach (ZoneSaviorTerrainProxy proxy in
+                 ghost.GetComponentsInChildren<ZoneSaviorTerrainProxy>(includeInactive: true))
         {
-            proxyGhost = proxy.gameObject;
-            return true;
-        }
+            if (!proxy || proxy.gameObject.activeInHierarchy)
+            {
+                continue;
+            }
 
-        return false;
+            ZNetView view = proxy.GetComponent<ZNetView>();
+            if (!view)
+            {
+                continue;
+            }
+
+            if (view.m_zdo != null)
+            {
+                ZoneSaviorPlugin.ZoneSaviorLogger.LogWarning(
+                    $"ZoneSavior placement ghost unexpectedly initialized ZDO {view.m_zdo.m_uid}; leaving it intact for diagnostics.");
+                continue;
+            }
+
+            Piece piece = proxy.GetComponent<Piece>();
+            if (piece && ReferenceEquals(piece.m_nview, view))
+            {
+                piece.m_nview = null;
+            }
+
+            // Inactive proxy prefabs defer Awake until after vanilla's ZNetView init guard has ended.
+            // Placement ghosts do not use a network view; actual placement clones the registered prefab.
+            UnityEngine.Object.DestroyImmediate(view);
+        }
     }
 
     public static void PreparePlacementGhost(Player player)
     {
-        if (!ShouldShowTo(player) || !player.m_placementGhost || !TryGetProxyGhost(player.m_placementGhost, out GameObject proxyGhost))
+        if (!ShouldShowTo(player) ||
+            !player.m_placementGhost ||
+            !TryGetDirectProxyGhost(player, out GameObject proxyGhost))
         {
             ClearPendingSlopeStart();
             HideAreaLine();
@@ -63,14 +105,49 @@ internal static partial class AdminTerrainTool
             return;
         }
 
+        if (IsPaintProxyObject(proxyGhost))
+        {
+            ClearPendingSlopeStart();
+            DrawPaintGridPreviewIfChanged(
+                proxyGhost.transform.position,
+                proxyGhost.transform.rotation,
+                CurrentPaintSettings());
+            return;
+        }
+
+        if (IsResetProxyObject(proxyGhost) && CurrentTerrainResetScope == TerrainResetScope.PaintOnly)
+        {
+            ClearPendingSlopeStart();
+            DrawPaintGridPreviewIfChanged(
+                proxyGhost.transform.position,
+                proxyGhost.transform.rotation,
+                CurrentPaintSettings(),
+                includeBoundary: true);
+            return;
+        }
+
+        if (IsResetProxyObject(proxyGhost))
+        {
+            ClearPendingSlopeStart();
+            DrawTerrainCircleLineIfChanged(
+                proxyGhost.transform.position,
+                Quaternion.identity,
+                CurrentCircleRadius());
+            return;
+        }
+
         ClearPendingSlopeStart();
         DrawCircleLineIfChanged(proxyGhost.transform.position, Quaternion.identity, CurrentCircleRadius());
     }
 
     private static void UpdatePlacementSizingInput()
     {
+        UpdateTerrainResetScopeInput();
+
         Player player = Player.m_localPlayer;
-        if (!player || !player.m_placementGhost || !TryGetProxyGhost(player.m_placementGhost, out GameObject proxyGhost))
+        if (!ShouldShowTo(player) ||
+            !player.m_placementGhost ||
+            !TryGetDirectProxyGhost(player, out GameObject proxyGhost))
         {
             return;
         }
@@ -124,12 +201,16 @@ internal static partial class AdminTerrainTool
     private static bool ShouldSuppressVanillaPlacementWheelRotation()
     {
         Player player = Player.m_localPlayer;
-        if (!player || !player.m_placementGhost || !TryGetProxyGhost(player.m_placementGhost, out GameObject proxyGhost))
+        if (!ShouldShowTo(player) ||
+            !player.m_placementGhost ||
+            !TryGetDirectProxyGhost(player, out GameObject proxyGhost))
         {
             return false;
         }
 
-        return (IsSlopeProxyObject(proxyGhost) || IsTerrainProxyObject(proxyGhost) || IsPaintProxyObject(proxyGhost)) &&
+        return (IsSlopeProxyObject(proxyGhost) ||
+                IsTerrainProxyObject(proxyGhost) ||
+                IsPaintProxyObject(proxyGhost)) &&
                IsTerrainToolModifierHeld();
     }
 
@@ -190,13 +271,74 @@ internal static partial class AdminTerrainTool
         return IsProxyObject(obj) &&
                !IsSlopeProxyObject(obj) &&
                !IsPaintProxyObject(obj) &&
-               !IsResetProxyObject(obj) &&
-               !IsPaintResetProxyObject(obj);
+               !IsResetProxyObject(obj);
+    }
+
+    private static void UpdateTerrainResetScopeInput()
+    {
+        Player player = Player.m_localPlayer;
+        if (!ShouldShowTo(player) || !IsDirectResetToolSelected(player))
+        {
+            if (CurrentTerrainResetScope != TerrainResetScope.TerrainAndPaint)
+            {
+                ResetTerrainResetScope();
+                UpdatePieceDescriptions();
+                HideAreaLine();
+            }
+
+            return;
+        }
+
+        if (!player.m_placementGhost ||
+            !TryGetDirectProxyGhost(player, out GameObject proxyGhost) ||
+            !IsResetProxyObject(proxyGhost) ||
+            !CanHandleTerrainResetScopeInput() ||
+            !IsShortcutDown(AdminTerrainToolConfig.TerrainToolModifierKey))
+        {
+            return;
+        }
+
+        ToggleTerrainResetScope();
+        HideAreaLine();
+        UpdatePieceDescriptions();
+        ShowMessage($"ZoneSavior reset mode: {TerrainResetScopeLabel()}.");
+    }
+
+    private static bool IsDirectResetToolSelected(Player player)
+    {
+        if (!player || !player.InPlaceMode())
+        {
+            return false;
+        }
+
+        GameObject selectedPrefab = player && player.m_buildPieces
+            ? player.m_buildPieces.GetSelectedPrefab()
+            : null!;
+        return selectedPrefab &&
+               IsResetProxyObject(selectedPrefab) &&
+               (ReferenceEquals(selectedPrefab, _resetPrefab) ||
+                AdminTerrainInfinityHammerCompat.IsDirectMenuSelectionPrefab(selectedPrefab));
+    }
+
+    private static bool CanHandleTerrainResetScopeInput()
+    {
+        return !Hud.IsPieceSelectionVisible() &&
+               !Hud.InRadial() &&
+               !InventoryGui.IsVisible() &&
+               !Menu.IsVisible() &&
+               !Console.IsVisible() &&
+               !ZoneSaviorInputBlockers.IsTextInputVisible() &&
+               (Chat.instance == null || !Chat.instance.HasFocus());
     }
 
     private static bool IsTerrainToolModifierHeld()
     {
         KeyboardShortcut shortcut = AdminTerrainToolConfig.TerrainToolModifierKey;
+        if (shortcut.MainKey == KeyCode.None && !shortcut.Modifiers.Any())
+        {
+            return false;
+        }
+
         return IsShortcutHeld(shortcut);
     }
 
@@ -208,6 +350,30 @@ internal static partial class AdminTerrainTool
         }
 
         return IsKeyHeld(shortcut.MainKey) && shortcut.Modifiers.All(IsKeyHeld);
+    }
+
+    private static bool IsShortcutDown(KeyboardShortcut shortcut)
+    {
+        if (shortcut.MainKey != KeyCode.None)
+        {
+            return IsKeyDown(shortcut.MainKey) && shortcut.Modifiers.All(IsKeyHeld);
+        }
+
+        return shortcut.Modifiers.Any() &&
+               shortcut.Modifiers.All(IsKeyHeld) &&
+               shortcut.Modifiers.Any(IsKeyDown);
+    }
+
+    private static bool IsKeyDown(KeyCode key)
+    {
+        return key switch
+        {
+            KeyCode.LeftShift or KeyCode.RightShift => Input.GetKeyDown(KeyCode.LeftShift) || Input.GetKeyDown(KeyCode.RightShift),
+            KeyCode.LeftControl or KeyCode.RightControl => Input.GetKeyDown(KeyCode.LeftControl) || Input.GetKeyDown(KeyCode.RightControl),
+            KeyCode.LeftAlt or KeyCode.RightAlt => Input.GetKeyDown(KeyCode.LeftAlt) || Input.GetKeyDown(KeyCode.RightAlt),
+            KeyCode.None => false,
+            _ => Input.GetKeyDown(key)
+        };
     }
 
     private static bool IsKeyHeld(KeyCode key)
@@ -299,6 +465,16 @@ internal static partial class AdminTerrainTool
 
         _hasPendingSlopeStart = false;
         _pendingSlopeStartFrame = 0;
+    }
+}
+
+[HarmonyPatch(typeof(Player), "SetupPlacementGhost")]
+internal static class AdminTerrainToolSetupPlacementGhostPatch
+{
+    [HarmonyPriority(Priority.First)]
+    private static void Postfix(Player __instance)
+    {
+        AdminTerrainTool.RemoveDeferredProxyGhostViews(__instance);
     }
 }
 

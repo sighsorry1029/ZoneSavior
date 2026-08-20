@@ -10,11 +10,14 @@ namespace ZoneSavior;
 
 internal static class AdminTerrainInfinityHammerCompat
 {
+    private static readonly List<GameObject> DirectMenuSelectedPrefabs = [];
+
     private static ManualLogSource? _logger;
     private static bool _available;
     private static bool _patched;
     private static bool _saveDataConfigured;
     private static Type? _configurationType;
+    private static MethodInfo? _getSelectedPieceMethod;
 
     public static void Initialize(ManualLogSource logger, Harmony harmony)
     {
@@ -51,6 +54,7 @@ internal static class AdminTerrainInfinityHammerCompat
             [typeof(ZNetView), typeof(Piece)],
             nameof(InfinityHammerNoCreatorPrefix),
             prefix: true);
+        patched += PatchDirectMenuSelectionConstructor(harmony);
 
         _patched = patched > 0;
         EnsureSavesTerrainData();
@@ -67,9 +71,46 @@ internal static class AdminTerrainInfinityHammerCompat
 
     public static void Shutdown()
     {
+        DirectMenuSelectedPrefabs.Clear();
+        _available = false;
         _patched = false;
         _saveDataConfigured = false;
         _configurationType = null;
+        _getSelectedPieceMethod = null;
+    }
+
+    internal static bool IsDirectMenuSelectionPrefab(GameObject selectedPrefab)
+    {
+        if (!_available || !selectedPrefab)
+        {
+            return false;
+        }
+
+        bool found = false;
+        for (int i = DirectMenuSelectedPrefabs.Count - 1; i >= 0; i--)
+        {
+            GameObject candidate = DirectMenuSelectedPrefabs[i];
+            if (!candidate)
+            {
+                DirectMenuSelectedPrefabs.RemoveAt(i);
+            }
+            else if (ReferenceEquals(candidate, selectedPrefab) ||
+                     candidate.transform.IsChildOf(selectedPrefab.transform))
+            {
+                found = true;
+            }
+        }
+
+        return found;
+    }
+
+    internal static bool IsCurrentDirectMenuSelection()
+    {
+        Player player = Player.m_localPlayer;
+        GameObject selectedPrefab = player && player.m_buildPieces
+            ? player.m_buildPieces.GetSelectedPrefab()
+            : null!;
+        return selectedPrefab && IsDirectMenuSelectionPrefab(selectedPrefab);
     }
 
     private static Type? FindLoadedType(string fullName)
@@ -114,6 +155,52 @@ internal static class AdminTerrainInfinityHammerCompat
         return 1;
     }
 
+    private static int PatchDirectMenuSelectionConstructor(Harmony harmony)
+    {
+        Type? objectSelectionType = FindLoadedType("InfinityHammer.ObjectSelection");
+        ConstructorInfo? target = objectSelectionType == null
+            ? null
+            : AccessTools.Constructor(objectSelectionType, [typeof(Piece), typeof(bool)]);
+        MethodInfo? patch = AccessTools.Method(
+            typeof(AdminTerrainInfinityHammerCompat),
+            nameof(InfinityHammerDirectMenuSelectionConstructed));
+        _getSelectedPieceMethod = objectSelectionType?.GetMethod(
+            "GetSelectedPiece",
+            BindingFlags.Public | BindingFlags.Instance);
+        if (target == null || patch == null || _getSelectedPieceMethod == null)
+        {
+            _logger?.LogDebug("Infinity Hammer compat skipped direct menu selection constructor.");
+            _getSelectedPieceMethod = null;
+            return 0;
+        }
+
+        harmony.Patch(target, postfix: new HarmonyMethod(patch));
+        return 1;
+    }
+
+    private static void InfinityHammerDirectMenuSelectionConstructed(object __instance, bool singleUse)
+    {
+        try
+        {
+            if (singleUse ||
+                _getSelectedPieceMethod?.Invoke(__instance, null) is not Piece piece ||
+                !piece ||
+                !AdminTerrainTool.IsProxyObject(piece.gameObject))
+            {
+                return;
+            }
+
+            GameObject selectedPrefab = piece.gameObject;
+            DirectMenuSelectedPrefabs.RemoveAll(candidate =>
+                !candidate || ReferenceEquals(candidate, selectedPrefab));
+            DirectMenuSelectedPrefabs.Add(selectedPrefab);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogDebug($"Infinity Hammer direct menu selection marker failed: {ex.Message}");
+        }
+    }
+
     private static void InfinityHammerPostProcessPrefix(GameObject obj)
     {
         AdminTerrainTool.PrepareInfinityHammerPlaced(obj);
@@ -121,7 +208,7 @@ internal static class AdminTerrainInfinityHammerCompat
 
     private static void InfinityHammerPostProcessPostfix(GameObject obj)
     {
-        AdminTerrainTool.ApplyInfinityHammerPlaced(obj);
+        AdminTerrainTool.ApplyInfinityHammerPlaced(obj, IsCurrentDirectMenuSelection());
     }
 
     private static bool InfinityHammerNoCreatorPrefix(ZNetView view, Piece piece)

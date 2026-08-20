@@ -73,7 +73,7 @@ internal static class ZoneSaviorExpandWorldDataCompat
             return true;
         }
 
-        CleanProxyGhost(obj, obj.GetComponent<ZNetView>());
+        InitializeProxy(obj, obj.GetComponent<ZNetView>());
         return false;
     }
 
@@ -85,17 +85,19 @@ internal static class ZoneSaviorExpandWorldDataCompat
             return true;
         }
 
-        CleanProxyGhost(obj, view);
+        InitializeProxy(obj, view);
         return false;
     }
 
     private static bool ShouldHandle(GameObject obj)
     {
-        return ZNetView.m_ghostInit && obj && AdminTerrainTool.IsProxyObject(obj);
+        return obj && AdminTerrainTool.IsProxyObject(obj);
     }
 
-    private static void CleanProxyGhost(GameObject obj, ZNetView? view)
+    private static void InitializeProxy(GameObject obj, ZNetView? view)
     {
+        bool ghostInit = ZNetView.m_ghostInit;
+        ZDO? pendingInitZdo = GetMatchingPendingInitZdo(obj);
         if (!obj.activeSelf)
         {
             obj.SetActive(true);
@@ -104,18 +106,30 @@ internal static class ZoneSaviorExpandWorldDataCompat
         view = view ? view : obj.GetComponent<ZNetView>();
         if (!view)
         {
+            DiscardFailedProxyInitialization(obj, pendingInitZdo);
             return;
         }
 
         ZDO? zdo = view.GetZDO();
-        if (zdo == null)
+        if (zdo == null && ghostInit)
         {
-            zdo = TryConsumePendingInitZdo(obj, view);
+            zdo = TryConsumePendingInitZdo(view, pendingInitZdo);
         }
 
         if (zdo == null)
         {
-            LogMissingZdoOnce(obj);
+            DiscardFailedProxyInitialization(obj, pendingInitZdo);
+            return;
+        }
+
+        if (!ghostInit)
+        {
+            ZoneSaviorTerrainProxy proxy = obj.GetComponent<ZoneSaviorTerrainProxy>();
+            if (proxy)
+            {
+                AdminTerrainTool.ApplyLoadedProxy(proxy);
+            }
+
             return;
         }
 
@@ -124,7 +138,7 @@ internal static class ZoneSaviorExpandWorldDataCompat
         ZNetScene.instance?.m_instances.Remove(zdo);
     }
 
-    private static ZDO? TryConsumePendingInitZdo(GameObject obj, ZNetView view)
+    private static ZDO? GetMatchingPendingInitZdo(GameObject obj)
     {
         ZDO? pending = ZNetView.m_initZDO;
         if (pending == null || pending.GetPrefab() != StringExtensionMethods.GetStableHashCode(Utils.GetPrefabName(obj)))
@@ -132,16 +146,36 @@ internal static class ZoneSaviorExpandWorldDataCompat
             return null;
         }
 
-        view.m_zdo = pending;
-        ZNetView.m_initZDO = null;
+        return pending;
+    }
 
-        ZoneSaviorTerrainProxy proxy = obj.GetComponent<ZoneSaviorTerrainProxy>();
-        if (proxy)
+    private static ZDO? TryConsumePendingInitZdo(ZNetView view, ZDO? pending)
+    {
+        if (pending == null || !ReferenceEquals(ZNetView.m_initZDO, pending))
         {
-            AdminTerrainTool.ApplyLoadedProxy(proxy);
+            return null;
         }
 
+        view.m_zdo = pending;
+        ZNetView.m_initZDO = null;
         return pending;
+    }
+
+    private static void DiscardFailedProxyInitialization(GameObject obj, ZDO? pending)
+    {
+        if (pending != null)
+        {
+            if (ReferenceEquals(ZNetView.m_initZDO, pending))
+            {
+                ZNetView.m_initZDO = null;
+            }
+
+            pending.Created = false;
+            ZNetScene.instance?.m_instances.Remove(pending);
+        }
+
+        LogMissingZdoOnce(obj);
+        UnityEngine.Object.Destroy(obj);
     }
 
     private static void LogMissingZdoOnce(GameObject obj)
@@ -152,6 +186,6 @@ internal static class ZoneSaviorExpandWorldDataCompat
         }
 
         _missingZdoLogged = true;
-        _logger?.LogWarning($"Expand World Data compat could not initialize ZoneSavior proxy ghost ZDO for {Utils.GetPrefabName(obj)}.");
+        _logger?.LogWarning($"Expand World Data compat could not initialize ZoneSavior proxy ZDO for {Utils.GetPrefabName(obj)}.");
     }
 }

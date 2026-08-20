@@ -12,7 +12,6 @@ internal static partial class AdminTerrainTool
     public const string SlopePrefabName = "ZoneSaviorTerrainProxySlope";
     public const string PaintPrefabName = "ZoneSaviorPaintProxy";
     public const string ResetPrefabName = "ZoneSaviorTerrainReset";
-    public const string PaintResetPrefabName = "ZoneSaviorPaintReset";
 
     private const int DataVersion = 11;
     private const float AdminTerrainMaxDelta = 1024f;
@@ -31,11 +30,12 @@ internal static partial class AdminTerrainTool
     private static readonly int SlopePrefabHash = StringExtensionMethods.GetStableHashCode(SlopePrefabName);
     private static readonly int PaintPrefabHash = StringExtensionMethods.GetStableHashCode(PaintPrefabName);
     private static readonly int ResetPrefabHash = StringExtensionMethods.GetStableHashCode(ResetPrefabName);
-    private static readonly int PaintResetPrefabHash = StringExtensionMethods.GetStableHashCode(PaintResetPrefabName);
     private static readonly int VersionHash = Hash("version");
     private static readonly int ModeHash = Hash("mode");
     private static readonly int AppliedHash = Hash("applied");
     private static readonly int AppliedPositionHash = Hash("applied_position");
+    private static readonly int AppliedYawHash = Hash("applied_yaw");
+    private static readonly int AppliedSettingsHash = Hash("applied_settings");
     private static readonly int RadiusHash = Hash("radius");
     private static readonly int WidthHash = Hash("width");
     private static readonly int LengthHash = Hash("length");
@@ -48,12 +48,10 @@ internal static partial class AdminTerrainTool
     private static GameObject? _slopePrefab;
     private static GameObject? _paintPrefab;
     private static GameObject? _resetPrefab;
-    private static GameObject? _paintResetPrefab;
     private static Sprite? _icon;
     private static Sprite? _slopeIcon;
     private static Sprite? _paintIcon;
     private static Sprite? _resetIcon;
-    private static Sprite? _paintResetIcon;
     private static GameObject? _previewRoot;
     private static LineRenderer? _areaLine;
     private static Material? _lineMaterial;
@@ -67,6 +65,7 @@ internal static partial class AdminTerrainTool
     private static AdminTerrainPaintType _runtimePaintType;
     private static AdminTerrainPaintType _lastConfigPaintType;
     private static bool _runtimePaintTypeInitialized;
+    private static TerrainResetScope _terrainResetScope;
     private static bool _hasPendingSlopeStart;
     private static Vector3 _pendingSlopeStart;
     private static int _pendingSlopeStartFrame;
@@ -81,6 +80,7 @@ internal static partial class AdminTerrainTool
     public static void Initialize(ManualLogSource logger)
     {
         _logger = logger;
+        ResetTerrainResetScope();
     }
 
     public static void Update()
@@ -121,21 +121,21 @@ internal static partial class AdminTerrainTool
             UnityEngine.Object.Destroy(_resetPrefab);
         }
 
-        if (_paintResetPrefab)
-        {
-            UnityEngine.Object.Destroy(_paintResetPrefab);
-        }
-
+        ReleasePaintGridPreviewResources();
         if (_previewRoot)
         {
             UnityEngine.Object.Destroy(_previewRoot);
+        }
+
+        if (_lineMaterial)
+        {
+            UnityEngine.Object.Destroy(_lineMaterial);
         }
 
         _prefab = null;
         _slopePrefab = null;
         _paintPrefab = null;
         _resetPrefab = null;
-        _paintResetPrefab = null;
         _previewRoot = null;
         _areaLine = null;
         _lineMaterial = null;
@@ -144,6 +144,7 @@ internal static partial class AdminTerrainTool
         _hasPendingSlopeStart = false;
         _pendingSlopeStartFrame = 0;
         _lastPreviewKind = PreviewKind.None;
+        ResetTerrainResetScope();
     }
 
     public static bool IsProxyPiece(Piece piece)
@@ -171,18 +172,12 @@ internal static partial class AdminTerrainTool
         return obj && string.Equals(Utils.GetPrefabName(obj), ResetPrefabName, StringComparison.Ordinal);
     }
 
-    private static bool IsPaintResetProxyObject(GameObject obj)
-    {
-        return obj && string.Equals(Utils.GetPrefabName(obj), PaintResetPrefabName, StringComparison.Ordinal);
-    }
-
     private static bool IsProxyPrefabName(string prefabName)
     {
         return string.Equals(prefabName, PrefabName, StringComparison.Ordinal) ||
                string.Equals(prefabName, SlopePrefabName, StringComparison.Ordinal) ||
                string.Equals(prefabName, PaintPrefabName, StringComparison.Ordinal) ||
-               string.Equals(prefabName, ResetPrefabName, StringComparison.Ordinal) ||
-               string.Equals(prefabName, PaintResetPrefabName, StringComparison.Ordinal);
+               string.Equals(prefabName, ResetPrefabName, StringComparison.Ordinal);
     }
 
     public static void ConfigurePlacedProxy(ZoneSaviorTerrainProxy proxy)
@@ -211,12 +206,6 @@ internal static partial class AdminTerrainTool
             return;
         }
 
-        if (newMarker && IsPaintResetProxyObject(proxy.gameObject))
-        {
-            HandlePaintResetPlacement(proxy, nview);
-            return;
-        }
-
         if (newMarker)
         {
             if (IsSlopeProxyObject(proxy.gameObject))
@@ -241,7 +230,10 @@ internal static partial class AdminTerrainTool
         }
 
         zdo.Set(AppliedHash, false);
-        ApplyStoredSettings(proxy, force: true, notify: true);
+        if (!ApplyStoredSettings(proxy, force: true, notify: true))
+        {
+            proxy.QueueApplyRetry();
+        }
     }
 
     private static void HandleResetPlacement(ZoneSaviorTerrainProxy proxy, ZNetView? placedView)
@@ -249,55 +241,68 @@ internal static partial class AdminTerrainTool
         Vector3 position = proxy.transform.position;
         Quaternion rotation = proxy.transform.rotation;
         TerrainProxySettings settings = CurrentSettings();
+        TerrainResetScope resetScope = CurrentTerrainResetScope;
 
-        int terrainCompilers = ResetTerrain(position, rotation, settings);
-        int removed = ResetIntersectingProxyObjects(
+        if (!TryResetTerrainAndIntersectingProxyObjects(
             position,
             rotation,
             settings,
+            resetScope,
             placedView,
-            IsProxyObject,
-            out int proxyTerrainCompilers);
-        terrainCompilers += proxyTerrainCompilers;
-        ShowMessage($"ZoneSavior terrain reset {terrainCompilers} terrain compiler(s), removed {removed} terrain proxy object(s).");
-        proxy.QueueDestroy();
-    }
+            out int terrainCompilers,
+            out int removed,
+            out string failureReason))
+        {
+            ShowMessage(
+                $"ZoneSavior {GetTerrainResetScopeLabel(resetScope)} reset was not applied: " +
+                $"{failureReason}. No terrain proxy objects were removed.");
+            proxy.QueueDestroy();
+            return;
+        }
 
-    private static void HandlePaintResetPlacement(ZoneSaviorTerrainProxy proxy, ZNetView? placedView)
-    {
-        Vector3 position = proxy.transform.position;
-        Quaternion rotation = proxy.transform.rotation;
-        TerrainProxySettings settings = CurrentPaintSettings();
-
-        int terrainCompilers = ResetTerrain(position, rotation, settings);
-        int removed = ResetIntersectingProxyObjects(
-            position,
-            rotation,
-            settings,
-            placedView,
-            IsPaintProxyObject,
-            out int proxyTerrainCompilers);
-        terrainCompilers += proxyTerrainCompilers;
-        ShowMessage($"ZoneSavior paint reset {terrainCompilers} terrain compiler(s), removed {removed} paint proxy object(s).");
+        ShowMessage(
+            $"ZoneSavior {GetTerrainResetScopeLabel(resetScope)} reset {terrainCompilers} terrain compiler(s), " +
+            $"removed {removed} terrain proxy object(s).");
         proxy.QueueDestroy();
     }
 
     public static void ApplyLoadedProxy(ZoneSaviorTerrainProxy proxy)
     {
+        if (!proxy || ZNetView.m_ghostInit || ZNetView.m_useInitZDO || ZNetView.m_initZDO != null)
+        {
+            return;
+        }
+
+        if (!TryApplyLoadedProxy(proxy))
+        {
+            proxy.QueueApplyRetry();
+        }
+    }
+
+    internal static bool TryApplyLoadedProxy(ZoneSaviorTerrainProxy proxy)
+    {
+        if (!proxy || ZNetView.m_ghostInit || ZNetView.m_useInitZDO || ZNetView.m_initZDO != null)
+        {
+            return false;
+        }
+
         ZNetView? nview = proxy.GetComponent<ZNetView>();
         ZDO zdo = nview ? nview.GetZDO() : null!;
         if (zdo == null || !HasStoredSettings(zdo))
         {
-            return;
+            return true;
         }
 
+        TerrainProxySettings settings = ReadSettings(zdo);
         bool alreadyApplied = zdo.GetBool(AppliedHash, false);
-        if (alreadyApplied && HasAppliedAtPosition(zdo, proxy.transform.position))
+        if (alreadyApplied &&
+            (TrySeedMissingAppliedMarkers(zdo, proxy.transform, settings) ||
+             HasAppliedAtTransform(zdo, proxy.transform, settings)))
         {
-            return;
+            return true;
         }
 
-        ApplyStoredSettings(proxy, force: alreadyApplied);
+        return ApplyStoredSettings(proxy, force: alreadyApplied);
     }
 
     public static bool TryCreateLoadedProxy(ZDO zdo, ref GameObject result)
@@ -313,27 +318,49 @@ internal static partial class AdminTerrainTool
             return false;
         }
 
-        ZNetView.m_useInitZDO = true;
-        ZNetView.m_initZDO = zdo;
+        bool previousUseInitZdo = ZNetView.m_useInitZDO;
+        ZDO? previousInitZdo = ZNetView.m_initZDO;
+        bool created = false;
         try
         {
-            result = UnityEngine.Object.Instantiate(prefab, zdo.GetPosition(), zdo.GetRotation());
-            if (result && !result.activeSelf)
+            try
             {
-                result.SetActive(true);
+                ZNetView.m_useInitZDO = true;
+                ZNetView.m_initZDO = zdo;
+                result = UnityEngine.Object.Instantiate(prefab, zdo.GetPosition(), zdo.GetRotation());
+                if (result && !result.activeSelf)
+                {
+                    result.SetActive(true);
+                }
+
+                if (ZNetView.m_initZDO != null)
+                {
+                    _logger?.LogWarning($"ZoneSavior terrain object failed to consume ZDO {zdo.m_uid}.");
+                }
+
+                created = result != null;
+            }
+            finally
+            {
+                ZNetView.m_initZDO = null;
+                ZNetView.m_useInitZDO = false;
             }
 
-            if (ZNetView.m_initZDO != null)
+            if (created && result)
             {
-                _logger?.LogWarning($"ZoneSavior terrain object failed to consume ZDO {zdo.m_uid}.");
+                ZoneSaviorTerrainProxy proxy = result.GetComponent<ZoneSaviorTerrainProxy>();
+                if (proxy)
+                {
+                    ApplyLoadedProxy(proxy);
+                }
             }
 
-            return result != null;
+            return created;
         }
         finally
         {
-            ZNetView.m_initZDO = null;
-            ZNetView.m_useInitZDO = false;
+            ZNetView.m_initZDO = previousInitZdo;
+            ZNetView.m_useInitZDO = previousUseInitZdo;
         }
     }
 
@@ -365,7 +392,7 @@ internal static partial class AdminTerrainTool
         return view.GetZDO() != null;
     }
 
-    internal static void ApplyInfinityHammerPlaced(GameObject obj)
+    internal static void ApplyInfinityHammerPlaced(GameObject obj, bool directMenuSelection)
     {
         if (!IsProxyObject(obj))
         {
@@ -379,6 +406,14 @@ internal static partial class AdminTerrainTool
         }
 
         EnsurePlacedProxyInitialized(proxy);
+        ZNetView nview = proxy.GetComponent<ZNetView>();
+        ZDO zdo = nview ? nview.GetZDO() : null!;
+        if (directMenuSelection && zdo != null && !HasStoredSettings(zdo))
+        {
+            ConfigurePlacedProxy(proxy);
+            return;
+        }
+
         ApplyLoadedProxy(proxy);
     }
 
@@ -481,14 +516,15 @@ internal static partial class AdminTerrainTool
 
     private static TerrainProxySettings ReadSettings(ZDO zdo)
     {
-        int defaultMode = zdo.GetPrefab() == SlopePrefabHash
-            ? (int)TerrainProxyMode.Slope
-            : zdo.GetPrefab() == PaintPrefabHash
-                ? (int)TerrainProxyMode.Paint
-                : (int)TerrainProxyMode.Circle;
+        TerrainProxyMode defaultMode = zdo.GetPrefab() switch
+        {
+            int prefabHash when prefabHash == SlopePrefabHash => TerrainProxyMode.Slope,
+            int prefabHash when prefabHash == PaintPrefabHash => TerrainProxyMode.Paint,
+            _ => TerrainProxyMode.Circle
+        };
         TerrainProxyMode mode = (TerrainProxyMode)zdo.GetInt(
             ModeHash,
-            defaultMode);
+            (int)defaultMode);
 
         return new TerrainProxySettings(
             mode,
@@ -527,15 +563,67 @@ internal static partial class AdminTerrainTool
         return AdminTerrainMaxDelta;
     }
 
-    private static bool HasAppliedAtPosition(ZDO zdo, Vector3 position)
+    private static bool HasAppliedAtTransform(
+        ZDO zdo,
+        Transform transform,
+        TerrainProxySettings settings)
     {
-        if (!zdo.GetVec3(AppliedPositionHash, out Vector3 appliedPosition))
+        if (!HasAppliedAtPosition(zdo, transform.position) ||
+            zdo.GetInt(AppliedSettingsHash, int.MinValue) != GetSettingsFingerprint(settings))
         {
             return false;
         }
 
-        return Utils.DistanceXZ(appliedPosition, position) < 0.1f &&
+        if (settings.Mode != TerrainProxyMode.Slope)
+        {
+            return true;
+        }
+
+        float appliedYaw = zdo.GetFloat(AppliedYawHash, float.NaN);
+        return !float.IsNaN(appliedYaw) &&
+               Mathf.Abs(Mathf.DeltaAngle(appliedYaw, transform.rotation.eulerAngles.y)) < 0.1f;
+    }
+
+    private static bool TrySeedMissingAppliedMarkers(
+        ZDO zdo,
+        Transform transform,
+        TerrainProxySettings settings)
+    {
+        if (zdo.GetInt(AppliedSettingsHash, out _) ||
+            !HasAppliedAtPosition(zdo, transform.position))
+        {
+            return false;
+        }
+
+        zdo.Set(AppliedSettingsHash, GetSettingsFingerprint(settings));
+        if (settings.Mode == TerrainProxyMode.Slope)
+        {
+            zdo.Set(AppliedYawHash, transform.rotation.eulerAngles.y);
+        }
+
+        return true;
+    }
+
+    private static bool HasAppliedAtPosition(ZDO zdo, Vector3 position)
+    {
+        return zdo.GetVec3(AppliedPositionHash, out Vector3 appliedPosition) &&
+               Utils.DistanceXZ(appliedPosition, position) < 0.1f &&
                Mathf.Abs(appliedPosition.y - position.y) < 0.1f;
+    }
+
+    private static int GetSettingsFingerprint(TerrainProxySettings settings)
+    {
+        unchecked
+        {
+            int hash = (int)settings.Mode;
+            hash = hash * 31 + Mathf.RoundToInt(settings.Radius * 1000f);
+            hash = hash * 31 + Mathf.RoundToInt(settings.Width * 1000f);
+            hash = hash * 31 + Mathf.RoundToInt(settings.Length * 1000f);
+            hash = hash * 31 + Mathf.RoundToInt(settings.SlopeHeightDelta * 1000f);
+            hash = hash * 31 + Mathf.RoundToInt(settings.TerrainEdgeSoftness * 1000f);
+            hash = hash * 31 + (int)settings.PaintType;
+            return hash;
+        }
     }
 
     private static void ReportTerrainResult(string message, bool notify)
@@ -561,11 +649,36 @@ internal static partial class AdminTerrainTool
         return StringExtensionMethods.GetStableHashCode($"{ZoneSaviorPlugin.ModGUID}.terrain_proxy.{key}");
     }
 
+    private static TerrainResetScope CurrentTerrainResetScope => _terrainResetScope;
+
+    private static void ToggleTerrainResetScope()
+    {
+        _terrainResetScope = _terrainResetScope == TerrainResetScope.TerrainAndPaint
+            ? TerrainResetScope.PaintOnly
+            : TerrainResetScope.TerrainAndPaint;
+    }
+
+    private static void ResetTerrainResetScope()
+    {
+        _terrainResetScope = TerrainResetScope.TerrainAndPaint;
+    }
+
+    private static string GetTerrainResetScopeLabel(TerrainResetScope resetScope)
+    {
+        return resetScope == TerrainResetScope.PaintOnly ? "paint-only" : "terrain + paint";
+    }
+
+    private enum TerrainResetScope
+    {
+        TerrainAndPaint,
+        PaintOnly
+    }
+
     private enum TerrainProxyMode
     {
-        Circle,
-        Slope,
-        Paint
+        Circle = 0,
+        Slope = 1,
+        Paint = 2
     }
 
     private readonly struct SlopePlacement
@@ -622,7 +735,9 @@ internal static partial class AdminTerrainTool
         public AdminTerrainPaintType PaintType { get; }
         public bool ModifiesHeight => Mode is TerrainProxyMode.Circle or TerrainProxyMode.Slope;
         public bool ModifiesPaint => Mode == TerrainProxyMode.Paint;
-        public bool HasCircleFootprint => Mode != TerrainProxyMode.Slope;
+        public bool HasCircleFootprint => Mode is TerrainProxyMode.Circle or TerrainProxyMode.Paint;
+        public bool HasIdempotentHeightApplication =>
+            ModifiesHeight && (Mode != TerrainProxyMode.Circle || TerrainEdgeSoftness <= 0f);
 
         public float TerrainRadius
         {
@@ -682,7 +797,17 @@ internal static partial class AdminTerrainTool
 
 internal sealed class ZoneSaviorTerrainProxy : MonoBehaviour, IPlaced
 {
+    private const int ApplyRetryAttempts = 120;
+    private const float ApplyRetrySeconds = 0.5f;
+    private const float SlowApplyRetrySeconds = 10f;
+    private const float SlowRetryLogInterval = 60f;
+
+    private static float _nextSlowRetryLogTime;
+
     private Coroutine? _destroyRoutine;
+    private Coroutine? _applyRoutine;
+    private bool _hasAppliedPreparedBatch;
+    private ulong _appliedPreparedBatchFingerprint;
 
     private void Awake()
     {
@@ -692,6 +817,30 @@ internal sealed class ZoneSaviorTerrainProxy : MonoBehaviour, IPlaced
     public void OnPlaced()
     {
         AdminTerrainTool.ConfigurePlacedProxy(this);
+    }
+
+    public void QueueApplyRetry()
+    {
+        if (_applyRoutine != null || !isActiveAndEnabled)
+        {
+            return;
+        }
+
+        try
+        {
+            _applyRoutine = StartCoroutine(RetryApplyWhenTerrainIsReady());
+            if (_applyRoutine == null)
+            {
+                ZoneSaviorPlugin.ZoneSaviorLogger.LogWarning(
+                    "ZoneSavior terrain proxy could not start its terrain-ready retry coroutine.");
+            }
+        }
+        catch (Exception ex)
+        {
+            _applyRoutine = null;
+            ZoneSaviorPlugin.ZoneSaviorLogger.LogWarning(
+                $"ZoneSavior terrain proxy could not start its terrain-ready retry coroutine: {ex.Message}");
+        }
     }
 
     public void QueueDestroy()
@@ -704,6 +853,17 @@ internal sealed class ZoneSaviorTerrainProxy : MonoBehaviour, IPlaced
         _destroyRoutine = StartCoroutine(DestroyNextFrame());
     }
 
+    internal bool HasAppliedPreparedBatch(ulong fingerprint)
+    {
+        return _hasAppliedPreparedBatch && _appliedPreparedBatchFingerprint == fingerprint;
+    }
+
+    internal void MarkPreparedBatchApplied(ulong fingerprint)
+    {
+        _appliedPreparedBatchFingerprint = fingerprint;
+        _hasAppliedPreparedBatch = true;
+    }
+
     private IEnumerator DestroyNextFrame()
     {
         yield return null;
@@ -712,6 +872,44 @@ internal sealed class ZoneSaviorTerrainProxy : MonoBehaviour, IPlaced
         if (nview)
         {
             AdminTerrainTool.DestroyProxy(nview);
+        }
+    }
+
+    private IEnumerator RetryApplyWhenTerrainIsReady()
+    {
+        WaitForSeconds delay = new(ApplyRetrySeconds);
+        try
+        {
+            for (int attempt = 0; attempt < ApplyRetryAttempts; attempt++)
+            {
+                yield return delay;
+                if (AdminTerrainTool.TryApplyLoadedProxy(this))
+                {
+                    yield break;
+                }
+            }
+
+            if (Time.realtimeSinceStartup >= _nextSlowRetryLogTime)
+            {
+                _nextSlowRetryLogTime = Time.realtimeSinceStartup + SlowRetryLogInterval;
+                ZoneSaviorPlugin.ZoneSaviorLogger.LogWarning(
+                    $"ZoneSavior terrain proxy at {transform.position} is still waiting for complete terrain coverage; " +
+                    "continuing at a lower retry frequency.");
+            }
+
+            WaitForSeconds slowDelay = new(SlowApplyRetrySeconds);
+            while (true)
+            {
+                yield return slowDelay;
+                if (AdminTerrainTool.TryApplyLoadedProxy(this))
+                {
+                    yield break;
+                }
+            }
+        }
+        finally
+        {
+            _applyRoutine = null;
         }
     }
 }

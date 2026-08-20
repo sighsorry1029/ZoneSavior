@@ -77,7 +77,7 @@ Config sections:
   - `Slope Width`: default slope width.
   - `Terrain Edge Softness`: `0` is a hard edge, `1` is more rounded.
   - `Paint Type`: default paint proxy type.
-  - `Terrain Tool Modifier Key`: modifier used with mouse wheel for terrain tool adjustments.
+  - `Terrain Tool Modifier Key`: modifier used with mouse wheel for terrain tool adjustments and pressed to switch Terrain Reset mode.
 
 ## What Gets Archived
 
@@ -115,17 +115,19 @@ Tools:
 
 - `ZoneSavior Terrain Proxy`: fills terrain to the marker height in a circle.
 - `ZoneSavior TerrainProxy Slope`: place a start marker and an end marker to create a saved slope.
-- `ZoneSavior Paint Proxy`: stores terrain paint in a circle.
-- `ZoneSavior Paint Reset`: resets paint in the radius and removes intersecting paint proxies.
-- `ZoneSavior Terrain Reset`: resets terrain in the radius and removes intersecting terrain proxies.
+- `ZoneSavior Paint Proxy`: stores terrain paint in a circle and previews both its circular range and affected heightmap nodes.
+- `ZoneSavior Terrain Reset`: resets terrain height and paint in the radius and removes intersecting terrain, slope, and paint proxies. Press the terrain-tool modifier key (Alt by default) while directly placing it to switch to Paint Only mode, which resets only paint and removes only intersecting Paint Proxy objects.
 
 Wheel controls:
 
 - Terrain Proxy: wheel changes radius, modifier+wheel changes edge softness.
 - TerrainProxy Slope: modifier+wheel changes width.
 - Paint Proxy: wheel changes radius, modifier+wheel changes paint type.
+- Terrain Reset: wheel changes radius; press the modifier key to switch between Terrain + Paint and Paint Only. Deselecting the tool or leaving the world restores Terrain + Paint.
 
-The active radius, width, edge softness, paint type, and modifier hint are shown in the piece tooltip.
+The active radius, slope width, edge softness, paint type, reset mode, and modifier hint are shown in the piece tooltip. Terrain Reset, Paint Proxy, and Paint Only Reset range outlines follow the loaded terrain surface, while Terrain Proxy keeps a flat outline at its target height. Paint Proxy and Paint Only Reset also show their exact affected-node grid. Grids above 2,048 visible nodes fall back to the circular outline instead of showing a partial grid.
+
+Reset preflights complete loaded terrain coverage, known intersecting proxy footprints, and ownership. If any known requirement is not loaded and ready, no terrain is changed and no proxy is removed; move closer to the affected area and try again.
 
 Terrain, paint, and slope proxies are persistent prefab objects. They can be captured by blueprint tools, then replay terrain changes when placed again.
 

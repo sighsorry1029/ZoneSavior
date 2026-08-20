@@ -4,13 +4,8 @@ namespace ZoneSavior;
 
 internal static partial class AdminTerrainTool
 {
-    private static Sprite GetIcon(bool slope, bool reset, bool paint, bool paintReset)
+    private static Sprite GetIcon(bool slope, bool reset, bool paint)
     {
-        if (paintReset && _paintResetIcon)
-        {
-            return _paintResetIcon;
-        }
-
         if (paint && _paintIcon)
         {
             return _paintIcon;
@@ -21,12 +16,12 @@ internal static partial class AdminTerrainTool
             return _resetIcon;
         }
 
-        if (!paint && !paintReset && !reset && !slope && _icon)
+        if (!paint && !reset && !slope && _icon)
         {
             return _icon;
         }
 
-        if (!paint && !paintReset && !reset && slope && _slopeIcon)
+        if (!paint && !reset && slope && _slopeIcon)
         {
             return _slopeIcon;
         }
@@ -46,16 +41,12 @@ internal static partial class AdminTerrainTool
         Color resetDark = new(0.36f, 0.06f, 0.04f, 1f);
         Color terrain = paint
             ? paintColor
-            : paintReset
-            ? paintColor
             : reset
             ? resetColor
             : slope
                 ? new Color(0.35f, 0.78f, 0.86f, 1f)
                 : new Color(0.18f, 0.72f, 0.48f, 1f);
         Color terrainDark = paint
-            ? paintDark
-            : paintReset
             ? paintDark
             : reset
             ? resetDark
@@ -85,7 +76,7 @@ internal static partial class AdminTerrainTool
                 }
 
                 bool mound = y >= 31 && y <= 47 && x >= 16 && x <= 48;
-                if (!slope && !reset && !paint && !paintReset && mound)
+                if (!slope && !reset && !paint && mound)
                 {
                     float dx = Mathf.Abs(x - 32f) / 16f;
                     float dy = (y - 31f) / 16f;
@@ -95,7 +86,7 @@ internal static partial class AdminTerrainTool
                     }
                 }
 
-                if (paint || paintReset)
+                if (paint)
                 {
                     bool brushHead = Vector2.Distance(new Vector2(x, y), new Vector2(30f, 28f)) <= 9f;
                     bool brushHandle = x >= 37 && x <= 49 && y >= 39 && y <= 45 && Mathf.Abs((y - 42f) - (x - 43f) * 0.16f) <= 3f;
@@ -108,13 +99,6 @@ internal static partial class AdminTerrainTool
                     {
                         pixel = terrainDark;
                     }
-                }
-
-                if (paintReset &&
-                    ((Mathf.Abs(x - y) <= 2 && x >= 18 && x <= 46) ||
-                     (Mathf.Abs((x + y) - 64) <= 2 && x >= 18 && x <= 46)))
-                {
-                    pixel = ring;
                 }
 
                 if (reset)
@@ -156,7 +140,7 @@ internal static partial class AdminTerrainTool
                     }
                 }
 
-                if (!slope && !reset && !paint && !paintReset &&
+                if (!slope && !reset && !paint &&
                     ((Mathf.Abs(x - 32) <= 1 && y >= 12 && y <= 21) ||
                      (Mathf.Abs(y - 32) <= 1 && x >= 12 && x <= 21) ||
                      (Mathf.Abs(y - 32) <= 1 && x >= 43 && x <= 52)))
@@ -170,11 +154,7 @@ internal static partial class AdminTerrainTool
 
         texture.Apply();
         Sprite icon = Sprite.Create(texture, new Rect(0f, 0f, 64f, 64f), new Vector2(0.5f, 0.5f), 64f);
-        if (paintReset)
-        {
-            _paintResetIcon = icon;
-        }
-        else if (paint)
+        if (paint)
         {
             _paintIcon = icon;
         }
