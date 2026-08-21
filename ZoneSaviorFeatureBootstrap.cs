@@ -30,6 +30,7 @@ internal static class ZoneSaviorFeatureBootstrap
         ZoneBundleCommands.RegisterRpcs();
         ZoneBundleSupportGrace.Update();
         AutoArchiveCommands.RegisterRpcs();
+        CreatorNameLookupRpc.Register();
         AutoArchiveService.Update();
         ZoneBoundaryOverlay.Update();
         AdminTerrainTool.Update();
@@ -41,6 +42,7 @@ internal static class ZoneSaviorFeatureBootstrap
         ZoneBundleSupportGrace.Shutdown();
         ZoneBoundaryOverlay.Shutdown();
         AutoArchiveService.Shutdown();
+        CreatorNameLookupRpc.ClearRateLimits();
         AutoArchiveStore.Flush(force: true);
         AdminTerrainTool.Shutdown();
     }

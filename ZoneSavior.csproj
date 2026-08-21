@@ -133,6 +133,7 @@
         <Compile Include="AutoArchiveScanner.cs"/>
         <Compile Include="AutoArchiveService.cs"/>
         <Compile Include="AutoArchiveStore.cs"/>
+        <Compile Include="CreatorNameLookupRpc.cs"/>
         <Compile Include="BuildCounterHud.cs"/>
         <Compile Include="ZoneSaviorTimestamp.cs"/>
         <Compile Include="VeiledRecipesCompat.cs"/>

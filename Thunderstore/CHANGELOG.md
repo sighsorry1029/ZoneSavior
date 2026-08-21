@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.7
+
+- Added an optional read-only admin RPC that resolves one creator player ID to its last known name from server activity data.
+- Kept integrations soft through a versioned named RPC with no direct assembly dependency and no bulk activity-registry transfer.
+- Bounded lookups to one ID per request and added server, admin, sender, world, payload, and rate-limit validation.
+
 ## 1.2.6
 
 - Terrain Reset, Paint Proxy, and Paint Only Reset range outlines now follow the loaded terrain surface; Terrain Proxy retains its flat target-height outline.

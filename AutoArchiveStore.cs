@@ -242,6 +242,41 @@ internal static class AutoArchiveStore
         }
     }
 
+    internal static bool TryResolveLastKnownPlayerName(long playerId, out string name)
+    {
+        name = "";
+        if (playerId == 0L)
+        {
+            return false;
+        }
+
+        lock (Sync)
+        {
+            if (!PlayersById.TryGetValue(playerId, out PlayerActivityRecord record) || record.Names == null)
+            {
+                return false;
+            }
+
+            for (int index = record.Names.Count - 1; index >= 0; index--)
+            {
+                string candidate = record.Names[index]?.Trim() ?? "";
+                if (candidate.Length == 0 ||
+                    string.Equals(candidate, "unknown", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(candidate, "manual", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                // Return an immutable value while still holding the store lock instead of
+                // exposing the mutable activity record or its aliases collection.
+                name = candidate;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public static bool TryGetPlayerIdsBySteamId(string steamId, out List<long> playerIds, out string normalizedSteamId)
     {
         normalizedSteamId = ZoneSaviorSteamIds.Normalize(steamId);
