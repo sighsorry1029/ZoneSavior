@@ -54,6 +54,7 @@ internal static class AdminTerrainInfinityHammerCompat
             [typeof(ZNetView), typeof(Piece)],
             nameof(InfinityHammerNoCreatorPrefix),
             prefix: true);
+        patched += PatchReplayBatchBoundary(harmony);
         patched += PatchDirectMenuSelectionConstructor(harmony);
 
         _patched = patched > 0;
@@ -178,6 +179,31 @@ internal static class AdminTerrainInfinityHammerCompat
         return 1;
     }
 
+    private static int PatchReplayBatchBoundary(Harmony harmony)
+    {
+        MethodInfo? target = AccessTools.Method(
+            typeof(Player),
+            "PlacePiece",
+            [typeof(Piece), typeof(Vector3), typeof(Quaternion), typeof(bool)]);
+        MethodInfo? prefix = AccessTools.Method(
+            typeof(AdminTerrainInfinityHammerCompat),
+            nameof(InfinityHammerPlacePiecePrefix));
+        MethodInfo? finalizer = AccessTools.Method(
+            typeof(AdminTerrainInfinityHammerCompat),
+            nameof(InfinityHammerPlacePieceFinalizer));
+        if (target == null || prefix == null || finalizer == null)
+        {
+            _logger?.LogDebug("Infinity Hammer compat skipped Player.PlacePiece replay boundary.");
+            return 0;
+        }
+
+        harmony.Patch(
+            target,
+            prefix: new HarmonyMethod(prefix),
+            finalizer: new HarmonyMethod(finalizer));
+        return 1;
+    }
+
     private static void InfinityHammerDirectMenuSelectionConstructed(object __instance, bool singleUse)
     {
         try
@@ -199,6 +225,23 @@ internal static class AdminTerrainInfinityHammerCompat
         {
             _logger?.LogDebug($"Infinity Hammer direct menu selection marker failed: {ex.Message}");
         }
+    }
+
+    private static void InfinityHammerPlacePiecePrefix(out bool __state)
+    {
+        __state = false;
+        AdminTerrainTool.BeginBlueprintReplayBatch();
+        __state = true;
+    }
+
+    private static Exception? InfinityHammerPlacePieceFinalizer(Exception? __exception, bool __state)
+    {
+        if (__state)
+        {
+            AdminTerrainTool.CompleteBlueprintReplayBatch(__exception == null);
+        }
+
+        return __exception;
     }
 
     private static void InfinityHammerPostProcessPrefix(GameObject obj)

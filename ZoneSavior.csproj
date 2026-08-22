@@ -144,6 +144,7 @@
         <Compile Include="AdminTerrainToolPlacement.cs"/>
         <Compile Include="AdminTerrainToolPrefabs.cs"/>
         <Compile Include="AdminTerrainToolPreview.cs"/>
+        <Compile Include="AdminTerrainToolReplay.cs"/>
         <Compile Include="AdminTerrainToolTerrainApply.cs"/>
         <Compile Include="ZoneSaviorAdminTerrainTool.cs"/>
         <Compile Include="ZoneSaviorCoroutines.cs"/>

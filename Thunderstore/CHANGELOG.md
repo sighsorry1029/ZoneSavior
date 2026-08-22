@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.8
+
+- Breaking: Terrain proxy data now requires the new ordered-replay format; proxies and blueprints saved by earlier ZoneSavior versions are intentionally not replayed. Re-place the proxies and re-save affected blueprints.
+- Added deterministic terrain-proxy batches for direct placement, Infinity Hammer blueprint placement, and Expand World Data blueprint locations. Overlapping height, slope, and paint proxies are replayed in their original canonical application order after the complete batch is registered.
+- Added a server-coordinated single-executor terrain controller for multiplayer and dedicated servers. It validates proxy and terrain manifests and revisions, commits canonical multi-zone `_TerrainCompiler` data with retry checkpoints, and prevents concurrent proxy resets or zone-bundle loads from racing the active batch.
+- Reduced the initial visible placement delay by probing newly loaded replay terrain every frame during the first second, while retaining slower retries for terrain streaming and commit replication.
+- Hardened Infinity Hammer and Expand World Data integration so failed or incomplete blueprint placement cannot partially replay ZoneSavior proxies; Expand World Data ghost locations remain deferred until a player streams their terrain.
+- Terrain replay now rejects client-prepared results unless they exactly match the server-recomputed ZoneSavior proxy transition. Legacy or third-party terrain modifiers affecting the same heightmap can therefore make a batch fail closed.
+- Terrain batches fail closed: if the assigned executor disconnects before completion, restart the server world session before retrying.
+
 ## 1.2.7
 
 - Added an optional read-only admin RPC that resolves one creator player ID to its last known name from server activity data.

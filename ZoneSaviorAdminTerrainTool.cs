@@ -13,7 +13,7 @@ internal static partial class AdminTerrainTool
     public const string PaintPrefabName = "ZoneSaviorPaintProxy";
     public const string ResetPrefabName = "ZoneSaviorTerrainReset";
 
-    private const int DataVersion = 11;
+    private const int DataVersion = 13;
     private const float AdminTerrainMaxDelta = 1024f;
     private const float MinCircleRadius = 0.5f;
     private const float MaxCircleRadius = 128f;
@@ -36,6 +36,8 @@ internal static partial class AdminTerrainTool
     private static readonly int AppliedPositionHash = Hash("applied_position");
     private static readonly int AppliedYawHash = Hash("applied_yaw");
     private static readonly int AppliedSettingsHash = Hash("applied_settings");
+    private static readonly int ApplyOrderHash = Hash("apply_order");
+    private static readonly int ApplyOrderPendingHash = Hash("apply_order_pending");
     private static readonly int RadiusHash = Hash("radius");
     private static readonly int WidthHash = Hash("width");
     private static readonly int LengthHash = Hash("length");
@@ -76,6 +78,7 @@ internal static partial class AdminTerrainTool
     private static float _lastPreviewWidth;
     private static float _lastPreviewLength;
     private static float _lastPreviewHeightDelta;
+    private static bool _unsupportedTerrainDataVersionLogged;
 
     public static void Initialize(ManualLogSource logger)
     {
@@ -86,6 +89,7 @@ internal static partial class AdminTerrainTool
     public static void Update()
     {
         EnsureRegistered();
+        UpdateTerrainReplayController();
         AdminTerrainInfinityHammerCompat.Update();
         UpdatePlacementSizingInput();
         if (!Player.m_localPlayer)
@@ -144,6 +148,8 @@ internal static partial class AdminTerrainTool
         _hasPendingSlopeStart = false;
         _pendingSlopeStartFrame = 0;
         _lastPreviewKind = PreviewKind.None;
+        _unsupportedTerrainDataVersionLogged = false;
+        ResetBlueprintReplayState();
         ResetTerrainResetScope();
     }
 
@@ -183,23 +189,41 @@ internal static partial class AdminTerrainTool
     public static void ConfigurePlacedProxy(ZoneSaviorTerrainProxy proxy)
     {
         EnsurePlacedProxyInitialized(proxy);
+        proxy.MarkPlacementHandled();
 
         ZNetView? nview = proxy.GetComponent<ZNetView>();
         ZDO zdo = nview ? nview.GetZDO() : null!;
         if (zdo == null)
         {
+            FailBlueprintReplayBatch();
             ShowMessage("ZoneSavior terrain proxy could not initialize ZDO data.");
             return;
         }
 
         if (!IsAdmin())
         {
+            FailBlueprintReplayBatch();
             ShowMessage("ZoneSavior terrain proxy is admin only.");
             proxy.QueueDestroy();
             return;
         }
 
-        bool newMarker = !HasStoredSettings(zdo);
+        int storedVersion = zdo.GetInt(VersionHash, 0);
+        bool newMarker = storedVersion == 0;
+        if (!newMarker && storedVersion != DataVersion)
+        {
+            FinalizeBlueprintReplayProxyRegistration(proxy, zdo, liveProxy: true);
+            ShowMessage(
+                $"ZoneSavior terrain proxy data version {storedVersion} is unsupported; " +
+                $"place a new version {DataVersion} proxy.");
+            return;
+        }
+
+        if (!newMarker && FinalizeBlueprintReplayProxyRegistration(proxy, zdo, liveProxy: true))
+        {
+            return;
+        }
+
         if (newMarker && IsResetProxyObject(proxy.gameObject))
         {
             HandleResetPlacement(proxy, nview);
@@ -227,10 +251,24 @@ internal static partial class AdminTerrainTool
                 zdo.SetRotation(proxy.transform.rotation);
                 WriteSettings(zdo, CurrentSettings());
             }
+
+            zdo.Set(ApplyOrderHash, NextApplyOrder());
+            zdo.Set(ApplyOrderPendingHash, true);
         }
 
         zdo.Set(AppliedHash, false);
-        if (!ApplyStoredSettings(proxy, force: true, notify: true))
+        if (newMarker &&
+            FinalizeBlueprintReplayProxyRegistration(
+                proxy,
+                zdo,
+                liveProxy: true,
+                requiresCompletedSource: false))
+        {
+            return;
+        }
+
+        AssignStandaloneReplayBatch(zdo);
+        if (!TryApplyLoadedProxy(proxy))
         {
             proxy.QueueApplyRetry();
         }
@@ -238,6 +276,15 @@ internal static partial class AdminTerrainTool
 
     private static void HandleResetPlacement(ZoneSaviorTerrainProxy proxy, ZNetView? placedView)
     {
+        if (IsTerrainMutationControllerBusy)
+        {
+            ShowMessage(
+                "ZoneSavior terrain reset was not applied because an ordered terrain batch is active; " +
+                "retry after that batch finishes.");
+            proxy.QueueDestroy();
+            return;
+        }
+
         Vector3 position = proxy.transform.position;
         Quaternion rotation = proxy.transform.rotation;
         TerrainProxySettings settings = CurrentSettings();
@@ -268,7 +315,12 @@ internal static partial class AdminTerrainTool
 
     public static void ApplyLoadedProxy(ZoneSaviorTerrainProxy proxy)
     {
-        if (!proxy || ZNetView.m_ghostInit || ZNetView.m_useInitZDO || ZNetView.m_initZDO != null)
+        if (!proxy || TryDeferBlueprintReplayProxy(proxy))
+        {
+            return;
+        }
+
+        if (ZNetView.m_ghostInit || ZNetView.m_useInitZDO || ZNetView.m_initZDO != null)
         {
             return;
         }
@@ -281,28 +333,76 @@ internal static partial class AdminTerrainTool
 
     internal static bool TryApplyLoadedProxy(ZoneSaviorTerrainProxy proxy)
     {
-        if (!proxy || ZNetView.m_ghostInit || ZNetView.m_useInitZDO || ZNetView.m_initZDO != null)
+        if (!proxy)
+        {
+            return false;
+        }
+
+        if (TryDeferBlueprintReplayProxy(proxy))
+        {
+            return true;
+        }
+
+        if (ZNetView.m_ghostInit || ZNetView.m_useInitZDO || ZNetView.m_initZDO != null)
         {
             return false;
         }
 
         ZNetView? nview = proxy.GetComponent<ZNetView>();
         ZDO zdo = nview ? nview.GetZDO() : null!;
-        if (zdo == null || !HasStoredSettings(zdo))
+        if (zdo == null)
         {
             return true;
         }
 
+        int storedVersion = zdo.GetInt(VersionHash, 0);
+        if (storedVersion != DataVersion)
+        {
+            if (storedVersion > 0 && !_unsupportedTerrainDataVersionLogged)
+            {
+                _unsupportedTerrainDataVersionLogged = true;
+                _logger?.LogWarning(
+                    $"ZoneSavior terrain proxy data version {storedVersion} is unsupported; " +
+                    $"version {DataVersion} proxies with server batch metadata are required.");
+            }
+
+            return true;
+        }
+
+        long applyOrder = zdo.GetLong(ApplyOrderHash, 0L);
+        if (!IsValidApplyOrder(applyOrder))
+        {
+            _logger?.LogWarning(
+                $"ZoneSavior terrain proxy {zdo.m_uid} has no valid apply order; refusing an unordered replay.");
+            return true;
+        }
+
+        ObserveApplyOrder(applyOrder);
         TerrainProxySettings settings = ReadSettings(zdo);
         bool alreadyApplied = zdo.GetBool(AppliedHash, false);
         if (alreadyApplied &&
-            (TrySeedMissingAppliedMarkers(zdo, proxy.transform, settings) ||
-             HasAppliedAtTransform(zdo, proxy.transform, settings)))
+            !zdo.GetBool(ApplyOrderPendingHash, false) &&
+            HasAppliedAtTransform(zdo, proxy.transform, settings))
         {
             return true;
         }
 
-        return ApplyStoredSettings(proxy, force: alreadyApplied);
+        long replayBatch = zdo.GetLong(ReplayBatchHash, 0L);
+        int replayCount = zdo.GetInt(ReplayBatchCountHash, 0);
+        int replayIndex = zdo.GetInt(ReplayBatchIndexHash, -1);
+        if (replayBatch != 0L || replayCount != 0 || replayIndex >= 0)
+        {
+            if (replayBatch <= 0L || replayCount <= 0 || replayIndex < 0)
+            {
+                LogInvalidReplayMetadata(zdo, "incomplete replay metadata");
+                return true;
+            }
+
+            return TryApplyReplayOperation(proxy, zdo, replayBatch, replayCount, replayIndex);
+        }
+
+        LogInvalidReplayMetadata(zdo, "no server terrain batch metadata");
+        return true;
     }
 
     public static bool TryCreateLoadedProxy(ZDO zdo, ref GameObject result)
@@ -405,13 +505,34 @@ internal static partial class AdminTerrainTool
             return;
         }
 
+        if (proxy.PlacementHandled)
+        {
+            return;
+        }
+
         EnsurePlacedProxyInitialized(proxy);
         ZNetView nview = proxy.GetComponent<ZNetView>();
         ZDO zdo = nview ? nview.GetZDO() : null!;
+        if (zdo == null)
+        {
+            FailBlueprintReplayBatch();
+            return;
+        }
+
         if (directMenuSelection && zdo != null && !HasStoredSettings(zdo))
         {
             ConfigurePlacedProxy(proxy);
             return;
+        }
+
+        if (zdo != null && FinalizeBlueprintReplayProxyRegistration(proxy, zdo, liveProxy: true))
+        {
+            return;
+        }
+
+        if (zdo != null)
+        {
+            AssignStandaloneReplayBatch(zdo);
         }
 
         ApplyLoadedProxy(proxy);
@@ -584,26 +705,6 @@ internal static partial class AdminTerrainTool
                Mathf.Abs(Mathf.DeltaAngle(appliedYaw, transform.rotation.eulerAngles.y)) < 0.1f;
     }
 
-    private static bool TrySeedMissingAppliedMarkers(
-        ZDO zdo,
-        Transform transform,
-        TerrainProxySettings settings)
-    {
-        if (zdo.GetInt(AppliedSettingsHash, out _) ||
-            !HasAppliedAtPosition(zdo, transform.position))
-        {
-            return false;
-        }
-
-        zdo.Set(AppliedSettingsHash, GetSettingsFingerprint(settings));
-        if (settings.Mode == TerrainProxyMode.Slope)
-        {
-            zdo.Set(AppliedYawHash, transform.rotation.eulerAngles.y);
-        }
-
-        return true;
-    }
-
     private static bool HasAppliedAtPosition(ZDO zdo, Vector3 position)
     {
         return zdo.GetVec3(AppliedPositionHash, out Vector3 appliedPosition) &&
@@ -623,18 +724,6 @@ internal static partial class AdminTerrainTool
             hash = hash * 31 + Mathf.RoundToInt(settings.TerrainEdgeSoftness * 1000f);
             hash = hash * 31 + (int)settings.PaintType;
             return hash;
-        }
-    }
-
-    private static void ReportTerrainResult(string message, bool notify)
-    {
-        if (notify)
-        {
-            ShowMessage(message);
-        }
-        else
-        {
-            _logger?.LogDebug(message);
         }
     }
 
@@ -736,9 +825,6 @@ internal static partial class AdminTerrainTool
         public bool ModifiesHeight => Mode is TerrainProxyMode.Circle or TerrainProxyMode.Slope;
         public bool ModifiesPaint => Mode == TerrainProxyMode.Paint;
         public bool HasCircleFootprint => Mode is TerrainProxyMode.Circle or TerrainProxyMode.Paint;
-        public bool HasIdempotentHeightApplication =>
-            ModifiesHeight && (Mode != TerrainProxyMode.Circle || TerrainEdgeSoftness <= 0f);
-
         public float TerrainRadius
         {
             get
@@ -806,8 +892,9 @@ internal sealed class ZoneSaviorTerrainProxy : MonoBehaviour, IPlaced
 
     private Coroutine? _destroyRoutine;
     private Coroutine? _applyRoutine;
-    private bool _hasAppliedPreparedBatch;
-    private ulong _appliedPreparedBatchFingerprint;
+    private bool _placementHandled;
+
+    internal bool PlacementHandled => _placementHandled;
 
     private void Awake()
     {
@@ -817,6 +904,11 @@ internal sealed class ZoneSaviorTerrainProxy : MonoBehaviour, IPlaced
     public void OnPlaced()
     {
         AdminTerrainTool.ConfigurePlacedProxy(this);
+    }
+
+    internal void MarkPlacementHandled()
+    {
+        _placementHandled = true;
     }
 
     public void QueueApplyRetry()
@@ -853,17 +945,6 @@ internal sealed class ZoneSaviorTerrainProxy : MonoBehaviour, IPlaced
         _destroyRoutine = StartCoroutine(DestroyNextFrame());
     }
 
-    internal bool HasAppliedPreparedBatch(ulong fingerprint)
-    {
-        return _hasAppliedPreparedBatch && _appliedPreparedBatchFingerprint == fingerprint;
-    }
-
-    internal void MarkPreparedBatchApplied(ulong fingerprint)
-    {
-        _appliedPreparedBatchFingerprint = fingerprint;
-        _hasAppliedPreparedBatch = true;
-    }
-
     private IEnumerator DestroyNextFrame()
     {
         yield return null;
@@ -893,7 +974,8 @@ internal sealed class ZoneSaviorTerrainProxy : MonoBehaviour, IPlaced
             {
                 _nextSlowRetryLogTime = Time.realtimeSinceStartup + SlowRetryLogInterval;
                 ZoneSaviorPlugin.ZoneSaviorLogger.LogWarning(
-                    $"ZoneSavior terrain proxy at {transform.position} is still waiting for complete terrain coverage; " +
+                    $"ZoneSavior terrain proxy at {transform.position} is still waiting for complete terrain coverage, " +
+                    "its server terrain-batch turn, or canonical commit replication; " +
                     "continuing at a lower retry frequency.");
             }
 

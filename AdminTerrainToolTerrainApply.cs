@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
@@ -11,149 +13,115 @@ namespace ZoneSavior;
 internal static partial class AdminTerrainTool
 {
     private const float MaxPersistentProxyFootprintRadius = MaxSlopeSize * 0.7071068f;
+    private const int ReplayTerrainCheckpointMagic = 0x5A535243;
+    private const int MaxReplayTerrainNodes = 262144;
+    private const int MaxReplayTerrainDecodedBytes = 16 * 1024 * 1024;
 
-    private static bool ApplyStoredSettings(ZoneSaviorTerrainProxy proxy, bool force, bool notify = false)
+    private static bool TryPrepareReplayCommit(
+        ZoneSaviorTerrainProxy proxy,
+        ZDO source,
+        long batchId,
+        int batchCount,
+        int batchIndex,
+        IReadOnlyList<ReplayExpectedRevision> expectedTerrain,
+        out ReplayCommitProposal proposal,
+        out string failureReason)
     {
-        ZNetView nview = proxy.GetComponent<ZNetView>();
-        ZDO zdo = nview ? nview.GetZDO() : null!;
-        if (zdo == null || (!force && zdo.GetBool(AppliedHash, false)))
+        proposal = null!;
+        failureReason = string.Empty;
+        if (!proxy || source == null || !source.IsValid())
         {
-            return true;
+            failureReason = "the source proxy became unavailable while preparing its terrain commit";
+            return false;
         }
 
-        TerrainProxySettings settings = ReadSettings(zdo);
-        int changed = ApplyTerrain(
-            proxy,
-            proxy.transform.position,
-            proxy.transform.rotation,
-            settings,
-            out bool terrainReady);
-        if (!terrainReady)
+        // The transform can briefly lag its ZDO while an object is being streamed. Treat that as
+        // retryable; permanently invalidating the batch here would strand the server lease.
+        if (!IsProxyTransformSynchronized(source, proxy.transform))
         {
             return false;
         }
 
-        zdo.Set(AppliedHash, true);
-        zdo.Set(AppliedPositionHash, proxy.transform.position);
-        zdo.Set(AppliedYawHash, proxy.transform.rotation.eulerAngles.y);
-        zdo.Set(AppliedSettingsHash, GetSettingsFingerprint(settings));
-        string label = settings.Mode == TerrainProxyMode.Paint ? "paint proxy" : "terrain proxy";
-        string details = settings.Mode switch
+        TerrainProxySettings settings = ReadSettings(source);
+        Vector3 position = source.GetPosition();
+        Quaternion rotation = source.GetRotation();
+        if (expectedTerrain.Count == 0 || expectedTerrain.Count > MaxReplayTerrainCompilers)
         {
-            TerrainProxyMode.Paint => $"Paint={settings.PaintType}, Radius={settings.SearchRadius:0.##}",
-            TerrainProxyMode.Slope =>
-                $"CenterY={proxy.transform.position.y:0.##}, Width={settings.Width:0.##}, " +
-                $"Length={settings.Length:0.##}, HeightDelta={settings.SlopeHeightDelta:0.##}, " +
-                $"Yaw={proxy.transform.rotation.eulerAngles.y:0.##}",
-            _ => $"TargetY={proxy.transform.position.y:0.##}, Radius={settings.SearchRadius:0.##}"
-        };
-
-        if (changed > 0)
-        {
-            ReportTerrainResult(
-                $"ZoneSavior {label} applied {changed} terrain compiler(s). Mode={settings.Mode}, {details}.",
-                notify);
-        }
-        else
-        {
-            ReportTerrainResult(
-                $"ZoneSavior {label} made no terrain changes. Mode={settings.Mode}, {details}.",
-                notify);
+            failureReason = "the server supplied an invalid terrain compiler manifest";
+            return false;
         }
 
-        return true;
-    }
+        ZDOMan? world = ZDOMan.instance;
+        ZNetScene? scene = ZNetScene.instance;
+        if (world == null || scene == null)
+        {
+            return false;
+        }
 
-    private static int ApplyTerrain(
-        ZoneSaviorTerrainProxy proxy,
-        Vector3 position,
-        Quaternion rotation,
-        TerrainProxySettings settings,
-        out bool terrainReady)
-    {
         List<Heightmap> heightmaps = [];
         Heightmap.FindHeightmap(position, settings.SearchRadius + SearchPadding, heightmaps);
 
-        List<TerrainComp> preparedCompilers = [];
+        List<TerrainComp> compilers = [];
         List<Heightmap> preparedHeightmaps = [];
-        List<int> preparedWidths = [];
-        bool loadedTerrainReady = true;
+        List<int> widths = [];
         HashSet<TerrainComp> seen = [];
-        foreach (Heightmap heightmap in heightmaps)
+        HashSet<ZDOID> expectedIds = [];
+        foreach (ReplayExpectedRevision expected in expectedTerrain)
         {
-            if (!heightmap ||
-                heightmap.IsDistantLod ||
-                !FootprintIntersectsHeightmap(position, rotation, settings, heightmap))
+            if (expected.ZdoId.IsNone() || !expectedIds.Add(expected.ZdoId))
             {
-                continue;
+                failureReason = "the server supplied a duplicate terrain compiler manifest entry";
+                return false;
             }
 
-            TerrainComp compiler = heightmap.GetAndCreateTerrainCompiler();
-            if (!compiler)
+            ZDO terrainZdo = world.GetZDO(expected.ZdoId);
+            ZNetView view = terrainZdo != null ? scene.FindInstance(terrainZdo) : null!;
+            TerrainComp compiler = view ? view.GetComponent<TerrainComp>() : null!;
+            if (terrainZdo == null || !view || !compiler)
             {
-                loadedTerrainReady = false;
-                continue;
+                return false;
             }
 
-            if (!seen.Add(compiler))
+            if (!seen.Add(compiler) ||
+                !TryInspectTerrainCompiler(compiler, out Heightmap preparedHeightmap, out int width) ||
+                preparedHeightmap.IsDistantLod ||
+                !FootprintIntersectsHeightmap(position, rotation, settings, preparedHeightmap))
             {
-                loadedTerrainReady = false;
-                continue;
+                failureReason = "the live terrain compiler does not match the server manifest";
+                return false;
             }
 
-            if (!TryInspectTerrainCompiler(compiler, out Heightmap preparedHeightmap, out int width) ||
-                !ReferenceEquals(preparedHeightmap, heightmap))
+            ZDO liveTerrainZdo = compiler.m_nview && compiler.m_nview.IsValid()
+                ? compiler.m_nview.GetZDO()
+                : null!;
+            if (!ReferenceEquals(liveTerrainZdo, terrainZdo) ||
+                terrainZdo.GetPrefab() != TerrainCompilerPrefabHash)
             {
-                loadedTerrainReady = false;
-                continue;
+                failureReason = "the live terrain compiler ZDO does not match the server manifest";
+                return false;
             }
 
-            preparedCompilers.Add(compiler);
+            if (terrainZdo.DataRevision != expected.DataRevision ||
+                compiler.m_lastDataRevision != terrainZdo.DataRevision ||
+                (!ZNet.instance.IsServer() && world.m_clientChangeQueue.Contains(terrainZdo.m_uid)))
+            {
+                return false;
+            }
+
+            compilers.Add(compiler);
             preparedHeightmaps.Add(preparedHeightmap);
-            preparedWidths.Add(width);
+            widths.Add(width);
         }
 
-        terrainReady = loadedTerrainReady &&
-                       IsFootprintCoveredByHeightmaps(
-                           position,
-                           rotation,
-                           settings,
-                           heightmaps,
-                           preparedHeightmaps);
-
-        // Full-size height footprints can extend beyond the terrain streamed at one time.
-        // Hard-edged height application is absolute, so applying each fully prepared streamed batch is safe;
-        // keep Applied=false until a single batch proves full coverage.
-        bool canApplyPreparedBatch = terrainReady ||
-                                     (loadedTerrainReady &&
-                                      preparedCompilers.Count > 0 &&
-                                      settings.HasIdempotentHeightApplication);
-        if (!canApplyPreparedBatch)
-        {
-            return 0;
-        }
-
-        bool partialBatch = !terrainReady;
-        ulong partialBatchFingerprint = partialBatch
-            ? GetPreparedBatchFingerprint(
+        if (compilers.Count != expectedTerrain.Count ||
+            !IsFootprintCoveredByHeightmaps(
                 position,
                 rotation,
                 settings,
-                preparedCompilers,
-                preparedHeightmaps)
-            : 0UL;
-        if (partialBatch && proxy.HasAppliedPreparedBatch(partialBatchFingerprint))
+                heightmaps,
+                preparedHeightmaps))
         {
-            return 0;
-        }
-
-        foreach (TerrainComp compiler in preparedCompilers)
-        {
-            if (!TryClaimTerrainCompilerOwnership(compiler))
-            {
-                terrainReady = false;
-                return 0;
-            }
+            return false;
         }
 
         if (settings.ModifiesHeight)
@@ -164,63 +132,826 @@ internal static partial class AdminTerrainTool
                 "ZoneSavior terrain proxy");
         }
 
-        int changed = 0;
-        for (int index = 0; index < preparedCompilers.Count; index++)
+        List<ReplayTerrainCommitEntry> terrain = new(compilers.Count);
+        for (int index = 0; index < compilers.Count; index++)
         {
-            if (ApplyTerrainCompiler(
-                    preparedCompilers[index],
-                    preparedHeightmaps[index],
-                    preparedWidths[index],
-                    position,
-                    rotation,
-                    settings))
+            TerrainComp compiler = compilers[index];
+            ZDO terrainZdo = compiler.m_nview.GetZDO();
+
+            uint baseRevision = terrainZdo.DataRevision;
+            byte[]? existingData = terrainZdo.GetByteArray(ZDOVars.s_TCData);
+            byte[] committedData;
+            if (TryReadReplayTerrainCheckpoint(
+                    existingData,
+                    out long checkpointBatch,
+                    out int checkpointIndex) &&
+                checkpointBatch == batchId &&
+                checkpointIndex == batchIndex)
             {
-                changed++;
+                committedData = existingData!;
+            }
+            else
+            {
+                TerrainCompilerSnapshot snapshot = new(compiler);
+                try
+                {
+                    bool changed = ModifyTerrainCompiler(
+                        compiler,
+                        preparedHeightmaps[index],
+                        widths[index],
+                        position,
+                        rotation,
+                        settings);
+                    if (changed)
+                    {
+                        compiler.m_operations++;
+                        compiler.m_lastOpPoint = position;
+                        compiler.m_lastOpRadius = settings.SearchRadius;
+                    }
+
+                    if (!TrySerializeReplayTerrainCompiler(
+                            compiler,
+                            existingData,
+                            batchId,
+                            batchIndex,
+                            out committedData))
+                    {
+                        failureReason = "the canonical terrain compiler payload could not be preserved safely";
+                        return false;
+                    }
+                }
+                finally
+                {
+                    snapshot.Restore(compiler);
+                }
+            }
+
+            if (terrainZdo.DataRevision != baseRevision)
+            {
+                return false;
+            }
+
+            if (committedData.Length == 0 || committedData.Length > MaxReplayTerrainPayloadBytes)
+            {
+                failureReason = "a serialized terrain compiler exceeded the safe payload limit";
+                return false;
+            }
+
+            terrain.Add(new ReplayTerrainCommitEntry(terrainZdo.m_uid, baseRevision, committedData));
+        }
+
+        proposal = new ReplayCommitProposal(
+            batchId,
+            batchCount,
+            batchIndex,
+            source.m_uid,
+            source.DataRevision,
+            terrain);
+        return true;
+    }
+
+    private static bool IsReplayTerrainFootprintLoaded(ZoneSaviorTerrainProxy proxy, ZDO source)
+    {
+        if (!proxy || source == null || !source.IsValid() || !IsProxyTransformSynchronized(source, proxy.transform))
+        {
+            return false;
+        }
+
+        TerrainProxySettings settings = ReadSettings(source);
+        Vector3 position = proxy.transform.position;
+        Quaternion rotation = proxy.transform.rotation;
+        List<Heightmap> loadedHeightmaps = [];
+        Heightmap.FindHeightmap(position, settings.SearchRadius + SearchPadding, loadedHeightmaps);
+        List<Heightmap> usableHeightmaps = loadedHeightmaps
+            .Where(heightmap =>
+                heightmap &&
+                !heightmap.IsDistantLod &&
+                FootprintIntersectsHeightmap(position, rotation, settings, heightmap))
+            .ToList();
+        ZNetScene? scene = ZNetScene.instance;
+        return scene != null &&
+               usableHeightmaps.All(heightmap => scene.IsAreaReady(heightmap.transform.position)) &&
+               IsFootprintCoveredByHeightmaps(
+            position,
+            rotation,
+            settings,
+            loadedHeightmaps,
+            usableHeightmaps);
+    }
+
+    private static bool IsProxyTransformSynchronized(ZDO zdo, Transform transform)
+    {
+        Vector3 storedPosition = zdo.GetPosition();
+        Quaternion storedRotation = zdo.GetRotation();
+        return IsFinite(storedPosition) &&
+               Utils.DistanceXZ(storedPosition, transform.position) < 0.1f &&
+               Mathf.Abs(storedPosition.y - transform.position.y) < 0.1f &&
+               IsFinite(storedRotation) &&
+               Quaternion.Angle(storedRotation, transform.rotation) < 0.1f;
+    }
+
+    private static bool TrySerializeReplayTerrainCompiler(
+        TerrainComp compiler,
+        byte[]? existingData,
+        long batchId,
+        int batchIndex,
+        out byte[] data)
+    {
+        data = [];
+        byte[] trailingData = [];
+        if (existingData is { Length: > 0 })
+        {
+            if (!TryParseReplayTerrainData(existingData, out ReplayTerrainData existing) ||
+                existing.HeightCount != compiler.m_modifiedHeight.Length ||
+                existing.PaintCount != compiler.m_modifiedPaint.Length)
+            {
+                return false;
+            }
+
+            trailingData = existing.TrailingData;
+        }
+
+        ZPackage package = new();
+        package.Write(1);
+        package.Write(compiler.m_operations);
+        package.Write(compiler.m_lastOpPoint);
+        package.Write(compiler.m_lastOpRadius);
+        package.Write(compiler.m_modifiedHeight.Length);
+        for (int index = 0; index < compiler.m_modifiedHeight.Length; index++)
+        {
+            package.Write(compiler.m_modifiedHeight[index]);
+            if (compiler.m_modifiedHeight[index])
+            {
+                package.Write(compiler.m_levelDelta[index]);
+                package.Write(compiler.m_smoothDelta[index]);
             }
         }
 
-        if (partialBatch)
+        package.Write(compiler.m_modifiedPaint.Length);
+        for (int index = 0; index < compiler.m_modifiedPaint.Length; index++)
         {
-            proxy.MarkPreparedBatchApplied(partialBatchFingerprint);
+            package.Write(compiler.m_modifiedPaint[index]);
+            if (compiler.m_modifiedPaint[index])
+            {
+                Color paint = compiler.m_paintMask[index];
+                package.Write(paint.r);
+                package.Write(paint.g);
+                package.Write(paint.b);
+                package.Write(paint.a);
+            }
         }
 
-        if (changed > 0)
+        // TerrainComp.Load ignores trailing bytes. Preserve bytes owned by other mods and replace
+        // only ZoneSavior's fixed-size checkpoint at the end of the payload.
+        foreach (byte value in trailingData)
         {
-            ClutterSystem.instance?.ResetGrass(position, settings.SearchRadius + SearchPadding);
+            package.Write(value);
         }
 
-        return changed;
+        package.Write(ReplayTerrainCheckpointMagic);
+        package.Write(batchId);
+        package.Write(batchIndex);
+        data = Utils.Compress(package.GetArray());
+        return data.Length > 0 && data.Length <= MaxReplayTerrainPayloadBytes;
     }
 
-    private static ulong GetPreparedBatchFingerprint(
-        Vector3 position,
-        Quaternion rotation,
-        TerrainProxySettings settings,
-        List<TerrainComp> preparedCompilers,
-        List<Heightmap> preparedHeightmaps)
+    private static bool TryReadReplayTerrainCheckpoint(
+        byte[]? data,
+        out long batchId,
+        out int batchIndex)
     {
-        unchecked
+        batchId = 0L;
+        batchIndex = -1;
+        return TryParseReplayTerrainData(data, out ReplayTerrainData terrain) &&
+               terrain.HasCheckpoint &&
+               (batchId = terrain.CheckpointBatch) > 0L &&
+               (batchIndex = terrain.CheckpointIndex) >= 0;
+    }
+
+    private static bool TryParseReplayTerrainData(
+        byte[]? data,
+        out ReplayTerrainData terrain)
+    {
+        terrain = null!;
+        if (data == null || data.Length == 0 || data.Length > MaxReplayTerrainPayloadBytes)
         {
-            ulong hash = 14695981039346656037UL;
-            hash = MixBatchFingerprint(hash, GetSettingsFingerprint(settings));
-            hash = MixBatchFingerprint(hash, Mathf.RoundToInt(position.x * 1000f));
-            hash = MixBatchFingerprint(hash, Mathf.RoundToInt(position.y * 1000f));
-            hash = MixBatchFingerprint(hash, Mathf.RoundToInt(position.z * 1000f));
-            hash = MixBatchFingerprint(hash, Mathf.RoundToInt(rotation.eulerAngles.y * 1000f));
-            hash = MixBatchFingerprint(hash, preparedHeightmaps.Count);
-            for (int index = 0; index < preparedHeightmaps.Count; index++)
+            return false;
+        }
+
+        try
+        {
+            if (!TryDecompressReplayTerrainPayload(data, out byte[] decoded))
             {
-                hash = MixBatchFingerprint(hash, preparedHeightmaps[index].GetInstanceID());
-                hash = MixBatchFingerprint(hash, preparedCompilers[index].GetInstanceID());
+                return false;
             }
 
-            return hash;
+            ZPackage package = new(decoded);
+            if (package.ReadInt() != 1)
+            {
+                return false;
+            }
+
+            int operations = package.ReadInt();
+            Vector3 lastPoint = package.ReadVector3();
+            float lastRadius = package.ReadSingle();
+            if (operations < 0 || !IsFinite(lastPoint) || !IsFinite(lastRadius))
+            {
+                return false;
+            }
+
+            int heightCount = package.ReadInt();
+            if (heightCount <= 0 || heightCount > MaxReplayTerrainNodes)
+            {
+                return false;
+            }
+
+            int width = Mathf.RoundToInt(Mathf.Sqrt(heightCount)) - 1;
+            if (width <= 0 || (width + 1) * (width + 1) != heightCount)
+            {
+                return false;
+            }
+
+            bool[] modifiedHeight = new bool[heightCount];
+            float[] levelDelta = new float[heightCount];
+            float[] smoothDelta = new float[heightCount];
+            for (int index = 0; index < heightCount; index++)
+            {
+                bool modified = package.ReadBool();
+                modifiedHeight[index] = modified;
+                if (modified)
+                {
+                    float level = package.ReadSingle();
+                    float smooth = package.ReadSingle();
+                    if (!IsFinite(level) || !IsFinite(smooth))
+                    {
+                        return false;
+                    }
+
+                    levelDelta[index] = level;
+                    smoothDelta[index] = smooth;
+                }
+            }
+
+            int paintCount = package.ReadInt();
+            int legacyPaintCount = width * width;
+            if (paintCount != heightCount && paintCount != legacyPaintCount)
+            {
+                return false;
+            }
+
+            bool[] rawModifiedPaint = new bool[paintCount];
+            Color[] rawPaintMask = new Color[paintCount];
+            for (int index = 0; index < paintCount; index++)
+            {
+                bool modified = package.ReadBool();
+                rawModifiedPaint[index] = modified;
+                if (!modified)
+                {
+                    continue;
+                }
+
+                Color paint = new(
+                    package.ReadSingle(),
+                    package.ReadSingle(),
+                    package.ReadSingle(),
+                    package.ReadSingle());
+                if (!IsFinite(paint.r) ||
+                    !IsFinite(paint.g) ||
+                    !IsFinite(paint.b) ||
+                    !IsFinite(paint.a))
+                {
+                    return false;
+                }
+
+                rawPaintMask[index] = paint;
+            }
+
+            bool[] modifiedPaint = rawModifiedPaint;
+            Color[] paintMask = rawPaintMask;
+            if (paintCount == legacyPaintCount)
+            {
+                modifiedPaint = new bool[heightCount];
+                paintMask = new Color[heightCount];
+                int nodeWidth = width + 1;
+                for (int z = 0; z < nodeWidth; z++)
+                {
+                    for (int x = 0; x < nodeWidth; x++)
+                    {
+                        int sourceX = Mathf.Min(x, width - 1);
+                        int sourceZ = Mathf.Min(z, width - 1);
+                        int sourceIndex = sourceZ * width + sourceX;
+                        int targetIndex = z * nodeWidth + x;
+                        modifiedPaint[targetIndex] = rawModifiedPaint[sourceIndex];
+                        paintMask[targetIndex] = rawPaintMask[sourceIndex];
+                    }
+                }
+            }
+
+            int remaining = package.Size() - package.GetPos();
+            if (remaining < 0)
+            {
+                return false;
+            }
+
+            byte[] trailing = remaining == 0 ? [] : package.ReadByteArray(remaining);
+            bool hasCheckpoint = TrySplitReplayTerrainCheckpoint(
+                trailing,
+                out byte[] preservedTrailing,
+                out long checkpointBatch,
+                out int checkpointIndex);
+            terrain = new ReplayTerrainData(
+                operations,
+                lastPoint,
+                lastRadius,
+                modifiedHeight,
+                levelDelta,
+                smoothDelta,
+                modifiedPaint,
+                paintMask,
+                preservedTrailing,
+                hasCheckpoint,
+                checkpointBatch,
+                checkpointIndex);
+            return package.GetPos() == package.Size();
+        }
+        catch
+        {
+            terrain = null!;
+            return false;
         }
     }
 
-    private static ulong MixBatchFingerprint(ulong hash, int value)
+    private static bool TrySplitReplayTerrainCheckpoint(
+        byte[] trailing,
+        out byte[] preservedTrailing,
+        out long batchId,
+        out int batchIndex)
     {
-        return (hash ^ (uint)value) * 1099511628211UL;
+        const int checkpointSize = sizeof(int) + sizeof(long) + sizeof(int);
+        preservedTrailing = trailing;
+        batchId = 0L;
+        batchIndex = -1;
+        if (trailing.Length < checkpointSize)
+        {
+            return false;
+        }
+
+        try
+        {
+            byte[] checkpoint = new byte[checkpointSize];
+            Buffer.BlockCopy(trailing, trailing.Length - checkpointSize, checkpoint, 0, checkpointSize);
+            ZPackage package = new(checkpoint);
+            if (package.ReadInt() != ReplayTerrainCheckpointMagic)
+            {
+                return false;
+            }
+
+            batchId = package.ReadLong();
+            batchIndex = package.ReadInt();
+            if (batchId <= 0L || batchIndex < 0 || package.GetPos() != package.Size())
+            {
+                batchId = 0L;
+                batchIndex = -1;
+                return false;
+            }
+
+            int preservedLength = trailing.Length - checkpointSize;
+            preservedTrailing = new byte[preservedLength];
+            if (preservedLength > 0)
+            {
+                Buffer.BlockCopy(trailing, 0, preservedTrailing, 0, preservedLength);
+            }
+
+            return true;
+        }
+        catch
+        {
+            preservedTrailing = trailing;
+            batchId = 0L;
+            batchIndex = -1;
+            return false;
+        }
+    }
+
+    private static bool TryValidateReplayTerrainTransition(
+        ZDO source,
+        ZDO terrainZdo,
+        byte[] proposedData,
+        long expectedBatch,
+        int expectedIndex,
+        int expectedTerrainNodes,
+        out string failureReason)
+    {
+        failureReason = string.Empty;
+        if (!TryParseReplayTerrainData(proposedData, out ReplayTerrainData proposed) ||
+            !proposed.HasCheckpoint ||
+            proposed.CheckpointBatch != expectedBatch ||
+            proposed.CheckpointIndex != expectedIndex ||
+            proposed.HeightCount != expectedTerrainNodes ||
+            proposed.PaintCount != expectedTerrainNodes)
+        {
+            failureReason = "the proposed terrain payload has invalid dimensions or checkpoint metadata";
+            return false;
+        }
+
+        byte[]? canonicalBytes = terrainZdo.GetByteArray(ZDOVars.s_TCData);
+        ReplayTerrainData canonical;
+        if (canonicalBytes is { Length: > 0 })
+        {
+            if (!TryParseReplayTerrainData(canonicalBytes, out canonical) ||
+                canonical.HeightCount != expectedTerrainNodes ||
+                canonical.PaintCount != expectedTerrainNodes)
+            {
+                failureReason = "the canonical terrain payload could not be parsed safely";
+                return false;
+            }
+        }
+        else
+        {
+            canonical = ReplayTerrainData.CreateEmpty(expectedTerrainNodes);
+        }
+
+        if (!canonical.TrailingData.SequenceEqual(proposed.TrailingData))
+        {
+            failureReason = "the proposed terrain payload changed opaque trailing data";
+            return false;
+        }
+
+        if (canonical.HasCheckpoint && canonical.CheckpointBatch == expectedBatch)
+        {
+            if (canonical.CheckpointIndex > expectedIndex)
+            {
+                failureReason = "the canonical terrain checkpoint is ahead of the active replay operation";
+                return false;
+            }
+
+            if (canonical.CheckpointIndex == expectedIndex)
+            {
+                if (!ReplayTerrainCoreEquals(canonical, proposed))
+                {
+                    failureReason =
+                        "the proposed terrain payload does not match the already committed replay checkpoint";
+                    return false;
+                }
+
+                return true;
+            }
+        }
+
+        if (!TryBuildExpectedReplayTerrainTransition(
+                canonical,
+                source,
+                terrainZdo,
+                expectedTerrainNodes,
+                expectedBatch,
+                expectedIndex,
+                out ReplayTerrainData expected,
+                out failureReason))
+        {
+            return false;
+        }
+
+        if (!ReplayTerrainCoreEquals(expected, proposed))
+        {
+            failureReason =
+                "the proposed terrain payload does not match the server-recomputed proxy transition";
+            return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsValidReplaySettings(TerrainProxySettings settings)
+    {
+        if (!IsFinite(settings.Radius) ||
+            !IsFinite(settings.Width) ||
+            !IsFinite(settings.Length) ||
+            !IsFinite(settings.SlopeHeightDelta) ||
+            !IsFinite(settings.TerrainEdgeSoftness))
+        {
+            return false;
+        }
+
+        return settings.Mode switch
+        {
+            TerrainProxyMode.Circle => true,
+            TerrainProxyMode.Slope => true,
+            TerrainProxyMode.Paint => settings.PaintType is
+                AdminTerrainPaintType.Grass or
+                AdminTerrainPaintType.Dirt or
+                AdminTerrainPaintType.Cultivated or
+                AdminTerrainPaintType.Paved or
+                AdminTerrainPaintType.DarkGrass or
+                AdminTerrainPaintType.PatchyGrass or
+                AdminTerrainPaintType.MossyPaving or
+                AdminTerrainPaintType.DirtPaving or
+                AdminTerrainPaintType.DarkPaving or
+                AdminTerrainPaintType.ClearVegetation,
+            _ => false
+        };
+    }
+
+    private static bool TryBuildExpectedReplayTerrainTransition(
+        ReplayTerrainData canonical,
+        ZDO source,
+        ZDO terrainZdo,
+        int expectedTerrainNodes,
+        long expectedBatch,
+        int expectedIndex,
+        out ReplayTerrainData expected,
+        out string failureReason)
+    {
+        expected = null!;
+        failureReason = string.Empty;
+        TerrainProxySettings settings = ReadSettings(source);
+        Vector3 sourcePosition = source.GetPosition();
+        Quaternion sourceRotation = source.GetRotation();
+        Vector3 terrainPosition = terrainZdo.GetPosition();
+        if (!IsValidReplaySettings(settings) ||
+            !IsFinite(sourcePosition) ||
+            !IsFinite(sourceRotation) ||
+            !IsFinite(terrainPosition) ||
+            !TryGetReplayTerrainLayout(
+                expectedTerrainNodes,
+                out Heightmap template,
+                out int nodeWidth,
+                out float nodeScale) ||
+            HeightmapBuilder.instance == null ||
+            WorldGenerator.instance == null)
+        {
+            failureReason = "the source proxy or procedural terrain layout is invalid";
+            return false;
+        }
+
+        try
+        {
+            HeightmapBuilder.HMBuildData buildData = HeightmapBuilder.instance.RequestTerrainSync(
+                terrainPosition,
+                nodeWidth - 1,
+                nodeScale,
+                template.IsDistantLod,
+                WorldGenerator.instance);
+            if (buildData?.m_baseHeights == null ||
+                buildData.m_baseHeights.Count != expectedTerrainNodes ||
+                buildData.m_baseMask == null ||
+                buildData.m_baseMask.Length != expectedTerrainNodes)
+            {
+                failureReason = "the procedural base terrain is not ready";
+                return false;
+            }
+
+            bool[] modifiedHeight = (bool[])canonical.ModifiedHeight.Clone();
+            float[] levelDelta = (float[])canonical.LevelDelta.Clone();
+            float[] smoothDelta = (float[])canonical.SmoothDelta.Clone();
+            bool[] modifiedPaint = (bool[])canonical.ModifiedPaint.Clone();
+            Color[] paintMask = (Color[])canonical.PaintMask.Clone();
+            Quaternion inverseYaw = InverseYaw(sourceRotation);
+            int terrainWidth = nodeWidth - 1;
+            bool changed = false;
+            for (int index = 0; index < expectedTerrainNodes; index++)
+            {
+                float baseHeight = buildData.m_baseHeights[index];
+                Color basePaint = buildData.m_baseMask[index];
+                if (!IsFinite(baseHeight) ||
+                    !IsFinite(basePaint.r) ||
+                    !IsFinite(basePaint.g) ||
+                    !IsFinite(basePaint.b) ||
+                    !IsFinite(basePaint.a))
+                {
+                    failureReason = "the procedural base terrain contains a non-finite value";
+                    return false;
+                }
+
+                int x = index % nodeWidth;
+                int z = index / nodeWidth;
+                Vector3 node = terrainPosition;
+                node.x += (x - terrainWidth * 0.5f) * nodeScale;
+                node.z += (z - terrainWidth * 0.5f) * nodeScale;
+                if (!TryGetAffectedTerrainNode(
+                        sourcePosition,
+                        inverseYaw,
+                        settings,
+                        node,
+                        out Vector3 local,
+                        out float normalized))
+                {
+                    continue;
+                }
+
+                if (settings.ModifiesHeight)
+                {
+                    float currentHeight = Mathf.Clamp(
+                        baseHeight + canonical.LevelDelta[index] + canonical.SmoothDelta[index],
+                        baseHeight - AdminTerrainMaxDelta,
+                        baseHeight + AdminTerrainMaxDelta);
+                    float targetHeight = settings.GetTargetHeight(
+                        sourcePosition,
+                        terrainPosition.y,
+                        local.z);
+                    float delta =
+                        (targetHeight - currentHeight + smoothDelta[index]) *
+                        settings.GetLevelFalloff(local.x, local.z);
+                    smoothDelta[index] = 0f;
+                    float previous = levelDelta[index];
+                    levelDelta[index] = Mathf.Clamp(
+                        previous + delta,
+                        -AdminTerrainMaxDelta,
+                        AdminTerrainMaxDelta);
+                    modifiedHeight[index] = Mathf.Abs(levelDelta[index]) > 0.001f;
+                    changed |= Mathf.Abs(previous - levelDelta[index]) > 0.001f;
+                }
+
+                if (settings.ModifiesPaint && HasPaintInfluence(normalized))
+                {
+                    Color current = QuantizeReplayPaint(
+                        canonical.ModifiedPaint[index]
+                            ? canonical.PaintMask[index]
+                            : basePaint);
+                    Color target = GetPaintTarget(settings.PaintType, current);
+                    Color desired = Color.Lerp(
+                        current,
+                        target,
+                        Mathf.Pow(1f - Mathf.Clamp01(normalized), 0.1f));
+                    if (settings.PaintType != AdminTerrainPaintType.ClearVegetation)
+                    {
+                        desired.a = current.a;
+                    }
+
+                    if (modifiedPaint[index])
+                    {
+                        if (!Approximately(paintMask[index], desired))
+                        {
+                            paintMask[index] = desired;
+                            changed = true;
+                        }
+                    }
+                    else if (!Approximately(current, desired))
+                    {
+                        modifiedPaint[index] = true;
+                        paintMask[index] = desired;
+                        changed = true;
+                    }
+                }
+            }
+
+            int operations = canonical.Operations;
+            Vector3 lastOpPoint = canonical.LastOpPoint;
+            float lastOpRadius = canonical.LastOpRadius;
+            if (changed)
+            {
+                if (operations == int.MaxValue)
+                {
+                    failureReason = "the terrain operation counter is exhausted";
+                    return false;
+                }
+
+                operations++;
+                lastOpPoint = sourcePosition;
+                lastOpRadius = settings.SearchRadius;
+            }
+
+            expected = new ReplayTerrainData(
+                operations,
+                lastOpPoint,
+                lastOpRadius,
+                modifiedHeight,
+                levelDelta,
+                smoothDelta,
+                modifiedPaint,
+                paintMask,
+                canonical.TrailingData,
+                true,
+                expectedBatch,
+                expectedIndex);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            failureReason = $"the procedural terrain transition could not be recomputed: {ex.Message}";
+            return false;
+        }
+    }
+
+    private static bool TryGetReplayTerrainLayout(
+        int expectedTerrainNodes,
+        out Heightmap template,
+        out int nodeWidth,
+        out float nodeScale)
+    {
+        nodeWidth = Mathf.RoundToInt(Mathf.Sqrt(expectedTerrainNodes));
+        nodeScale = 0f;
+        template = ZoneSystem.instance && ZoneSystem.instance.m_zonePrefab
+            ? ZoneSystem.instance.m_zonePrefab.GetComponentInChildren<Heightmap>()
+            : null!;
+        if (!template ||
+            nodeWidth <= 1 ||
+            nodeWidth * nodeWidth != expectedTerrainNodes ||
+            template.m_width + 1 != nodeWidth ||
+            !IsFinite(template.m_scale) ||
+            template.m_scale <= 0f)
+        {
+            return false;
+        }
+
+        nodeScale = template.m_scale;
+        return true;
+    }
+
+    private static bool ReplayTerrainCoreEquals(
+        ReplayTerrainData left,
+        ReplayTerrainData right)
+    {
+        if (left.Operations != right.Operations ||
+            !ReplayVectorEquals(left.LastOpPoint, right.LastOpPoint) ||
+            left.LastOpRadius != right.LastOpRadius ||
+            left.HeightCount != right.HeightCount ||
+            left.PaintCount != right.PaintCount)
+        {
+            return false;
+        }
+
+        for (int index = 0; index < left.HeightCount; index++)
+        {
+            if (!ReplayHeightNodeEquals(left, right, index) ||
+                !ReplayPaintNodeEquals(left, right, index))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool ReplayHeightNodeEquals(
+        ReplayTerrainData left,
+        ReplayTerrainData right,
+        int index)
+    {
+        return left.ModifiedHeight[index] == right.ModifiedHeight[index] &&
+               left.LevelDelta[index] == right.LevelDelta[index] &&
+               left.SmoothDelta[index] == right.SmoothDelta[index];
+    }
+
+    private static bool ReplayPaintNodeEquals(
+        ReplayTerrainData left,
+        ReplayTerrainData right,
+        int index)
+    {
+        return left.ModifiedPaint[index] == right.ModifiedPaint[index] &&
+               ReplayColorEquals(left.PaintMask[index], right.PaintMask[index]);
+    }
+
+    private static bool ReplayVectorEquals(Vector3 left, Vector3 right)
+    {
+        return left.x == right.x && left.y == right.y && left.z == right.z;
+    }
+
+    private static bool ReplayColorEquals(Color left, Color right)
+    {
+        return left.r == right.r &&
+               left.g == right.g &&
+               left.b == right.b &&
+               left.a == right.a;
+    }
+
+    private static Color QuantizeReplayPaint(Color value)
+    {
+        return (Color)(Color32)value;
+    }
+
+    private static bool TryDecompressReplayTerrainPayload(byte[] data, out byte[] decoded)
+    {
+        decoded = [];
+        try
+        {
+            using MemoryStream input = new(data, writable: false);
+            using GZipStream gzip = new(input, CompressionMode.Decompress);
+            using MemoryStream output = new(Math.Min(data.Length * 4, MaxReplayTerrainDecodedBytes));
+            byte[] buffer = new byte[8192];
+            while (true)
+            {
+                int read = gzip.Read(buffer, 0, buffer.Length);
+                if (read == 0)
+                {
+                    break;
+                }
+
+                if (output.Length + read > MaxReplayTerrainDecodedBytes)
+                {
+                    return false;
+                }
+
+                output.Write(buffer, 0, read);
+            }
+
+            decoded = output.ToArray();
+            return decoded.Length > 0;
+        }
+        catch
+        {
+            decoded = [];
+            return false;
+        }
     }
 
     private static bool IsFootprintCoveredByHeightmaps(
@@ -675,6 +1406,8 @@ internal static partial class AdminTerrainTool
         List<Heightmap> preparedHeightmaps = [];
         HashSet<TerrainComp> seen = [];
         bool includeCircleBoundary = settings.Mode != TerrainProxyMode.Paint;
+        ZNetScene? scene = ZNetScene.instance;
+        ZDOMan? world = ZDOMan.instance;
         foreach (Heightmap heightmap in heightmaps)
         {
             if (!heightmap ||
@@ -689,12 +1422,27 @@ internal static partial class AdminTerrainTool
                 continue;
             }
 
+            if (scene == null || world == null || !scene.IsAreaReady(heightmap.transform.position))
+            {
+                failureReason = "a required terrain area is still streaming";
+                return false;
+            }
+
             TerrainComp compiler = heightmap.GetAndCreateTerrainCompiler();
             if (!compiler || !seen.Add(compiler) ||
                 !TryInspectTerrainCompiler(compiler, out Heightmap preparedHeightmap, out int width) ||
                 !ReferenceEquals(preparedHeightmap, heightmap))
             {
                 failureReason = "a required terrain compiler is not ready";
+                return false;
+            }
+
+            ZDO terrainZdo = compiler.m_nview.GetZDO();
+            if (terrainZdo == null ||
+                compiler.m_lastDataRevision != terrainZdo.DataRevision ||
+                (!ZNet.instance.IsServer() && world.m_clientChangeQueue.Contains(terrainZdo.m_uid)))
+            {
+                failureReason = "a required terrain compiler is still synchronizing";
                 return false;
             }
 
@@ -854,7 +1602,7 @@ internal static partial class AdminTerrainTool
         return new Vector2(value.x, value.z);
     }
 
-    private static bool ApplyTerrainCompiler(
+    private static bool ModifyTerrainCompiler(
         TerrainComp compiler,
         Heightmap heightmap,
         int width,
@@ -897,13 +1645,7 @@ internal static partial class AdminTerrainTool
             }
         }
 
-        if (!changed)
-        {
-            return false;
-        }
-
-        CommitTerrainCompiler(compiler, heightmap, position, settings.SearchRadius);
-        return true;
+        return changed;
     }
 
     private static bool ResetTerrainCompiler(
@@ -1211,6 +1953,105 @@ internal static partial class AdminTerrainTool
         public Quaternion Rotation { get; }
         public TerrainProxySettings Settings { get; }
         public TerrainResetChannels Channels { get; }
+    }
+
+    private sealed class ReplayTerrainData
+    {
+        public ReplayTerrainData(
+            int operations,
+            Vector3 lastOpPoint,
+            float lastOpRadius,
+            bool[] modifiedHeight,
+            float[] levelDelta,
+            float[] smoothDelta,
+            bool[] modifiedPaint,
+            Color[] paintMask,
+            byte[] trailingData,
+            bool hasCheckpoint,
+            long checkpointBatch,
+            int checkpointIndex)
+        {
+            Operations = operations;
+            LastOpPoint = lastOpPoint;
+            LastOpRadius = lastOpRadius;
+            ModifiedHeight = modifiedHeight;
+            LevelDelta = levelDelta;
+            SmoothDelta = smoothDelta;
+            ModifiedPaint = modifiedPaint;
+            PaintMask = paintMask;
+            TrailingData = trailingData;
+            HasCheckpoint = hasCheckpoint;
+            CheckpointBatch = checkpointBatch;
+            CheckpointIndex = checkpointIndex;
+        }
+
+        public int Operations { get; }
+        public Vector3 LastOpPoint { get; }
+        public float LastOpRadius { get; }
+        public bool[] ModifiedHeight { get; }
+        public float[] LevelDelta { get; }
+        public float[] SmoothDelta { get; }
+        public bool[] ModifiedPaint { get; }
+        public Color[] PaintMask { get; }
+        public byte[] TrailingData { get; }
+        public bool HasCheckpoint { get; }
+        public long CheckpointBatch { get; }
+        public int CheckpointIndex { get; }
+        public int HeightCount => ModifiedHeight.Length;
+        public int PaintCount => ModifiedPaint.Length;
+
+        public static ReplayTerrainData CreateEmpty(int terrainNodes)
+        {
+            return new ReplayTerrainData(
+                0,
+                Vector3.zero,
+                0f,
+                new bool[terrainNodes],
+                new float[terrainNodes],
+                new float[terrainNodes],
+                new bool[terrainNodes],
+                new Color[terrainNodes],
+                [],
+                false,
+                0L,
+                -1);
+        }
+    }
+
+    private sealed class TerrainCompilerSnapshot
+    {
+        private readonly int _operations;
+        private readonly Vector3 _lastOpPoint;
+        private readonly float _lastOpRadius;
+        private readonly bool[] _modifiedHeight;
+        private readonly float[] _levelDelta;
+        private readonly float[] _smoothDelta;
+        private readonly bool[] _modifiedPaint;
+        private readonly Color[] _paintMask;
+
+        public TerrainCompilerSnapshot(TerrainComp compiler)
+        {
+            _operations = compiler.m_operations;
+            _lastOpPoint = compiler.m_lastOpPoint;
+            _lastOpRadius = compiler.m_lastOpRadius;
+            _modifiedHeight = (bool[])compiler.m_modifiedHeight.Clone();
+            _levelDelta = (float[])compiler.m_levelDelta.Clone();
+            _smoothDelta = (float[])compiler.m_smoothDelta.Clone();
+            _modifiedPaint = (bool[])compiler.m_modifiedPaint.Clone();
+            _paintMask = (Color[])compiler.m_paintMask.Clone();
+        }
+
+        public void Restore(TerrainComp compiler)
+        {
+            compiler.m_operations = _operations;
+            compiler.m_lastOpPoint = _lastOpPoint;
+            compiler.m_lastOpRadius = _lastOpRadius;
+            Array.Copy(_modifiedHeight, compiler.m_modifiedHeight, _modifiedHeight.Length);
+            Array.Copy(_levelDelta, compiler.m_levelDelta, _levelDelta.Length);
+            Array.Copy(_smoothDelta, compiler.m_smoothDelta, _smoothDelta.Length);
+            Array.Copy(_modifiedPaint, compiler.m_modifiedPaint, _modifiedPaint.Length);
+            Array.Copy(_paintMask, compiler.m_paintMask, _paintMask.Length);
+        }
     }
 
     private readonly struct PreparedTerrainResetCompiler

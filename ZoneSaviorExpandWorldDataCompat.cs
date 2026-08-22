@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Reflection;
 using BepInEx.Bootstrap;
 using BepInEx.Logging;
@@ -10,6 +11,8 @@ namespace ZoneSavior;
 internal static class ZoneSaviorExpandWorldDataCompat
 {
     private const string DataManagerTypeName = "ExpandWorldData.DataManager";
+    private const string SpawnTypeName = "ExpandWorldData.Spawn";
+    private const string BlueprintTypeName = "ExpandWorldData.Blueprint";
 
     private static ManualLogSource? _logger;
     private static bool _patched;
@@ -33,6 +36,7 @@ internal static class ZoneSaviorExpandWorldDataCompat
         int patched = 0;
         patched += PatchCleanGhostInit(harmony, dataManagerType, typeof(GameObject), nameof(CleanGhostInitGameObjectPrefix));
         patched += PatchCleanGhostInit(harmony, dataManagerType, typeof(ZNetView), nameof(CleanGhostInitZNetViewPrefix));
+        patched += PatchBlueprintReplayBoundary(harmony);
 
         _patched = patched > 0;
         _logger.LogInfo($"Expand World Data compat initialized. Patched {patched} method(s).");
@@ -64,6 +68,62 @@ internal static class ZoneSaviorExpandWorldDataCompat
 
         harmony.Patch(target, prefix: new HarmonyMethod(patch));
         return 1;
+    }
+
+    private static int PatchBlueprintReplayBoundary(Harmony harmony)
+    {
+        Type? spawnType = FindLoadedType(SpawnTypeName);
+        MethodInfo? target = spawnType?
+            .GetMethods(BindingFlags.Public | BindingFlags.Static)
+            .FirstOrDefault(method =>
+            {
+                if (!string.Equals(method.Name, "Blueprint", StringComparison.Ordinal))
+                {
+                    return false;
+                }
+
+                ParameterInfo[] parameters = method.GetParameters();
+                return parameters.Length == 8 &&
+                       string.Equals(parameters[0].ParameterType.FullName, BlueprintTypeName, StringComparison.Ordinal) &&
+                       parameters[1].ParameterType == typeof(Vector3) &&
+                       parameters[2].ParameterType == typeof(Quaternion) &&
+                       parameters[3].ParameterType == typeof(Vector3) &&
+                       parameters[4].ParameterType == typeof(int);
+            });
+        MethodInfo? prefix = AccessTools.Method(
+            typeof(ZoneSaviorExpandWorldDataCompat),
+            nameof(BlueprintReplayPrefix));
+        MethodInfo? finalizer = AccessTools.Method(
+            typeof(ZoneSaviorExpandWorldDataCompat),
+            nameof(BlueprintReplayFinalizer));
+        if (target == null || prefix == null || finalizer == null)
+        {
+            _logger?.LogDebug("Expand World Data compat skipped Spawn.Blueprint replay boundary.");
+            return 0;
+        }
+
+        harmony.Patch(
+            target,
+            prefix: new HarmonyMethod(prefix),
+            finalizer: new HarmonyMethod(finalizer));
+        return 1;
+    }
+
+    private static void BlueprintReplayPrefix(out bool __state)
+    {
+        __state = false;
+        AdminTerrainTool.BeginBlueprintReplayBatch();
+        __state = true;
+    }
+
+    private static Exception? BlueprintReplayFinalizer(Exception? __exception, bool __state)
+    {
+        if (__state)
+        {
+            AdminTerrainTool.CompleteBlueprintReplayBatch(__exception == null);
+        }
+
+        return __exception;
     }
 
     private static bool CleanGhostInitGameObjectPrefix(GameObject obj)
@@ -106,6 +166,7 @@ internal static class ZoneSaviorExpandWorldDataCompat
         view = view ? view : obj.GetComponent<ZNetView>();
         if (!view)
         {
+            AdminTerrainTool.FailBlueprintReplayBatch();
             DiscardFailedProxyInitialization(obj, pendingInitZdo);
             return;
         }
@@ -118,14 +179,21 @@ internal static class ZoneSaviorExpandWorldDataCompat
 
         if (zdo == null)
         {
+            AdminTerrainTool.FailBlueprintReplayBatch();
             DiscardFailedProxyInitialization(obj, pendingInitZdo);
             return;
         }
 
+        ZoneSaviorTerrainProxy proxy = obj.GetComponent<ZoneSaviorTerrainProxy>();
+        bool replayDeferred = proxy &&
+                              AdminTerrainTool.FinalizeBlueprintReplayProxyRegistration(
+                                  proxy,
+                                  zdo,
+                                  liveProxy: !ghostInit);
+
         if (!ghostInit)
         {
-            ZoneSaviorTerrainProxy proxy = obj.GetComponent<ZoneSaviorTerrainProxy>();
-            if (proxy)
+            if (proxy && !replayDeferred)
             {
                 AdminTerrainTool.ApplyLoadedProxy(proxy);
             }
