@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.2.9
+
+- Breaking: Removed all ZoneSavior terrain proxy tools and prefab registrations, with no legacy aliases, replay support, automatic conversion, or world cleanup. Back up existing worlds and replace proxy-based blueprints with final-terrain snapshots captured using Infinity Hammer before upgrading.
+- Removed proxy ordering metadata, replay batches, executor assignment, terrain-commit RPCs, checkpoints, and proxy-specific Infinity Hammer, Expand World Data, TerrainMistile, and VeiledRecipes integration.
+- Removed the terrain-tool config section and the global terrain height-limit extension. Existing terrain beyond the game's normal limit needs a compatible separate height-limit mod on every relevant client to retain its previous appearance.
+- Terrain tool improvements are provided separately by the client-side InfinityHammerAddon, using Infinity Hammer's existing buttons instead of persistent proxy prefabs.
+- Kept zone bundle SupportFill terrain restoration, archiving, and zone maintenance unchanged.
+
 ## 1.2.8
 
 - Breaking: Terrain proxy data now requires the new ordered-replay format; proxies and blueprints saved by earlier ZoneSavior versions are intentionally not replayed. Re-place the proxies and re-save affected blueprints.

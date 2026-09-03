@@ -1,8 +1,8 @@
 {
   "name": "ZoneSavior",
-  "version_number": "1.2.8",
+  "version_number": "1.2.9",
   "website_url": "https://discord.gg/jkcJCq2sK5",
-  "description": "Automatically archiving Inactive-player structure and tamed animals per zone, zone bundle save/load/restore, player activity tracking, archive protection rules, per-zone WearNTear limits and terrain proxies that you can save in blueprints.",
+  "description": "Archive inactive-player structures and tamed animals per zone, save/load/restore zone bundles, track player activity, configure archive exclusions, and enforce per-zone WearNTear limits.",
   "dependencies": [
     "denikson-BepInExPack_Valheim-5.4.2333"
   ]

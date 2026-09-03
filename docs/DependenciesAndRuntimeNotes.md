@@ -1,6 +1,6 @@
 # Homestead and ZoneSavior dependency and runtime notes
 
-Last checked: 2026-05-02
+ZoneSavior sections checked against the current source: 2026-09-03. Homestead background was last checked on 2026-05-02.
 
 ## Runtime shape
 
@@ -86,9 +86,11 @@ If a connected inactive cluster has multiple creators, ZoneSavior uses the repre
 
 Homestead has a hard runtime dependency on Jotunn. Jotunn owns the custom hammer `Homestead` tab/category plumbing and is used to render generated snapshot icons for saved native blueprints.
 
-ZoneSavior no longer directly depends on Server Devcommands, World Edit Commands, Infinity Hammer, or Upgrade World. The zone bundle system uses ZoneSavior's own `zs-zdo-v1` ZDO data format for new saves.
+ZoneSavior has no hard or soft runtime dependency on Server Devcommands, World Edit Commands, Infinity Hammer, Expand World Data, TerrainMistile, VeiledRecipes, or Upgrade World. Its former terrain proxy integrations have been removed. The zone bundle system uses ZoneSavior's own `zs-zdo-v1` ZDO data format for new saves.
 
-`ServerSync.dll` and `YamlDotNet.dll` are bundled into both mod DLLs by ILRepack, so they are not Thunderstore runtime dependencies.
+InfinityHammerAddon is a separate client-side addon for Infinity Hammer's existing terrain tools. It does not depend on ZoneSavior and does not add persistent terrain proxy prefabs. Blueprint terrain snapshots are saved by Infinity Hammer and placed by Infinity Hammer or Expand World Data; they are separate from ZoneSavior's SupportFill zone bundles.
+
+`ServerSync.dll` and `YamlDotNet.dll` are bundled into the Homestead and ZoneSavior DLLs by ILRepack, so they are not Thunderstore runtime dependencies.
 
 ## Optional / operational companion
 
@@ -98,12 +100,11 @@ ZoneSavior no longer directly depends on Server Devcommands, World Edit Commands
 
 ## Thunderstore manifest
 
-Thunderstore dependencies use the `{team}-{package}-{version}` format documented by Thunderstore. The current manifest lists:
+Thunderstore dependencies use the `{team}-{package}-{version}` format documented by Thunderstore. ZoneSavior's current manifest lists only BepInEx:
 
 ```json
 [
-  "denikson-BepInExPack_Valheim-5.4.2202",
-  "ValheimModding-Jotunn-2.29.0"
+  "denikson-BepInExPack_Valheim-5.4.2333"
 ]
 ```
 
@@ -115,7 +116,7 @@ Server Devcommands enables dev/admin commands on servers and clients, improves a
 
 World Edit Commands adds advanced world editing commands, object spawning/editing, data/ZDO editing helpers, terrain commands, undo helpers, and serialization helpers. ZoneSavior no longer calls it directly.
 
-Infinity Hammer is an advanced building/admin tool: unrestricted building, selecting/copying objects, blueprints, placement manipulation, scaling, repairing/removing, and terrain/tool helpers. ZoneSavior no longer calls it directly; old Infinity Hammer-backed terrain payloads must be re-saved with the current ZoneSavior terrain format.
+Infinity Hammer is an advanced building/admin tool: unrestricted building, selecting/copying objects, blueprints, placement manipulation, scaling, repairing/removing, and terrain/tool helpers. ZoneSavior no longer calls it directly. To replace old ZoneSavior proxy-based blueprints, back up the world, capture the final terrain with Infinity Hammer while the previous ZoneSavior version is still available, and remove the old proxy entries from replacement blueprints. This version does not register, replay, migrate, or clean up old proxies. However, the game can discard unknown-prefab ZDOs when a server loads them, so retain an external world backup before upgrading. ZoneSavior also removes the former global height-limit extension; terrain beyond normal game limits requires a compatible separate height-limit mod on every relevant client.
 
 Upgrade World is a world maintenance tool for already explored areas: zone reset/generation/restore, object count/remove/edit, location reset/add/remove, chest reset, vegetation operations, and world upgrade workflows. ZoneSavior does not call it directly.
 

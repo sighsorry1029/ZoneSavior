@@ -136,17 +136,6 @@
         <Compile Include="CreatorNameLookupRpc.cs"/>
         <Compile Include="BuildCounterHud.cs"/>
         <Compile Include="ZoneSaviorTimestamp.cs"/>
-        <Compile Include="VeiledRecipesCompat.cs"/>
-        <Compile Include="ZoneSaviorExpandWorldDataCompat.cs"/>
-        <Compile Include="ZoneSaviorTerrainMistileCompat.cs"/>
-        <Compile Include="AdminTerrainInfinityHammerCompat.cs"/>
-        <Compile Include="AdminTerrainToolIcons.cs"/>
-        <Compile Include="AdminTerrainToolPlacement.cs"/>
-        <Compile Include="AdminTerrainToolPrefabs.cs"/>
-        <Compile Include="AdminTerrainToolPreview.cs"/>
-        <Compile Include="AdminTerrainToolReplay.cs"/>
-        <Compile Include="AdminTerrainToolTerrainApply.cs"/>
-        <Compile Include="ZoneSaviorAdminTerrainTool.cs"/>
         <Compile Include="ZoneSaviorCoroutines.cs"/>
         <Compile Include="ZoneSaviorUtilities.cs"/>
         <Compile Include="PlayerActivityTracker.cs"/>

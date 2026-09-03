@@ -1,5 +1,4 @@
 using BepInEx.Logging;
-using HarmonyLib;
 
 namespace ZoneSavior;
 
@@ -15,14 +14,6 @@ internal static class ZoneSaviorFeatureBootstrap
         AutoArchiveStore.Initialize(logger);
         AutoArchiveService.Initialize(logger);
         AutoArchiveCommands.Initialize(logger);
-        AdminTerrainTool.Initialize(logger);
-    }
-
-    public static void InitializeCompat(ManualLogSource logger, Harmony harmony)
-    {
-        ZoneSaviorExpandWorldDataCompat.Initialize(logger, harmony);
-        AdminTerrainTool.InitializeCompat(harmony);
-        VeiledRecipesCompat.Initialize(logger);
     }
 
     public static void Update()
@@ -33,7 +24,6 @@ internal static class ZoneSaviorFeatureBootstrap
         CreatorNameLookupRpc.Register();
         AutoArchiveService.Update();
         ZoneBoundaryOverlay.Update();
-        AdminTerrainTool.Update();
     }
 
     public static void Shutdown()
@@ -44,7 +34,6 @@ internal static class ZoneSaviorFeatureBootstrap
         AutoArchiveService.Shutdown();
         CreatorNameLookupRpc.ClearRateLimits();
         AutoArchiveStore.Flush(force: true);
-        AdminTerrainTool.Shutdown();
     }
 
     public static void ReloadZoneRulesFromDisk()

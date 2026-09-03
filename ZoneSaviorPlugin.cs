@@ -9,13 +9,10 @@ using ServerSync;
 namespace ZoneSavior;
 
 [BepInPlugin(ModGUID, ModName, ModVersion)]
-[BepInDependency("sighsorry.VeiledRecipes", BepInDependency.DependencyFlags.SoftDependency)]
-[BepInDependency("expand_world_data", BepInDependency.DependencyFlags.SoftDependency)]
-[BepInDependency("infinity_hammer", BepInDependency.DependencyFlags.SoftDependency)]
 public class ZoneSaviorPlugin : BaseUnityPlugin
 {
     internal const string ModName = "ZoneSavior";
-    internal const string ModVersion = "1.2.8";
+    internal const string ModVersion = "1.2.9";
     internal const string Author = "sighsorry";
     internal const string ModGUID = $"{Author}.{ModName}";
     internal const string DataStorageFolder = "ZoneSavior";
@@ -66,7 +63,6 @@ public class ZoneSaviorPlugin : BaseUnityPlugin
             EnsureDataDirectories();
             ZoneSaviorFeatureBootstrap.Initialize(ZoneSaviorLogger);
             _harmony.PatchAll(typeof(ZoneSaviorPlugin).Assembly);
-            ZoneSaviorFeatureBootstrap.InitializeCompat(ZoneSaviorLogger, _harmony);
             SetupWatchers();
             Config.Save();
         });
@@ -93,7 +89,6 @@ public class ZoneSaviorPlugin : BaseUnityPlugin
         ClientConfig.Bind(this);
         ZoneBundleConfig.Bind(this);
         AutoArchiveConfig.Bind(this);
-        AdminTerrainToolConfig.Bind(this);
     }
 
     private void SetupWatchers()

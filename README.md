@@ -1,18 +1,10 @@
 # ZoneSavior
-Automatically archiving Inactive-player structure and tamed animals per zone, zone bundle save/load/restore, player activity tracking, archive protection rules, per-zone WearNTear limits and terrain proxies that you can save in blueprints.
+Archive inactive-player structures and tamed animals per zone, save/load/restore zone bundles, track player activity, configure archive exclusions, and enforce per-zone WearNTear limits.
 
 ![](https://i.ibb.co/ycMvZ9fj/Video-Project-26.gif) <br>
 ![](https://i.ibb.co/G3czYNtr/zonearchive.gif) <br>
 
 ZoneSavior is a Valheim server maintenance mod for zone-based cleanup, archive, restore, and build-count control.
-
-![](https://i.ibb.co/dwmrT2HF/proxies.png) <br>
-Terrain proxies that you can save in blueprints.
-
-![](https://i.ibb.co/k6364Vpw/blueprint1.gif) <br>
-![](https://i.ibb.co/m5t9DZJG/blueprint2.gif) <br>
-Put terrain proxies and paint proxies for your blueprints!
-
 
 It can:
 
@@ -21,7 +13,6 @@ It can:
 - optionally reset archived source zones
 - enforce per-zone WearNTear limits from `zones.yml`
 - track player activity for inactive-owner cleanup
-- provide admin terrain proxy tools that can be saved in blueprints
 - provide an optional client zone UI
 
 ## Files
@@ -72,12 +63,6 @@ Config sections:
   - `Scan Interval Minutes`: automatic scan interval. `0` disables scheduled scans.
   - `Scanner Batch Size`: ZDOs inspected before yielding a frame.
   - `Max Zones Per Run`: maximum number of zones reserved for work in one automatic scan. Failed save/reset attempts still consume this budget.
-- `04 - Terrain Tool`
-  - `Radius`: default circle radius.
-  - `Slope Width`: default slope width.
-  - `Terrain Edge Softness`: `0` is a hard edge, `1` is more rounded.
-  - `Paint Type`: default paint proxy type.
-  - `Terrain Tool Modifier Key`: modifier used with mouse wheel for terrain tool adjustments and pressed to switch Terrain Reset mode.
 
 ## What Gets Archived
 
@@ -107,29 +92,15 @@ When saving a loaded zone, it samples the lower footprint of saved structures an
 
 If exact contacts are missing, ZoneSavior falls back to saved collider/footprint data and places terrain near the lowest reasonable support plane. The fallback is clamped to avoid extreme spikes.
 
-## Terrain Proxy Tools
+## Terrain Editing and Blueprints
 
-Admin terrain tools appear in the hammer Misc tab while debug mode is enabled and the local player is an admin.
+ZoneSavior no longer provides terrain proxy prefabs or replays terrain operations. Use Infinity Hammer to edit and save the final terrain snapshot in a blueprint, and Expand World Data to place that blueprint as a location. InfinityHammerAddon is a separate client-side addon for Infinity Hammer's existing tools; it does not depend on ZoneSavior or create saved terrain proxy objects.
 
-Tools:
+This is a breaking removal, without legacy aliases, replay support, or automatic world cleanup. Preserve an external backup of existing worlds and blueprints before upgrading. While the previous ZoneSavior version is still installed, capture the final terrain with Infinity Hammer and remove the old ZoneSavior proxy entries from replacement blueprints. ZoneSavior does not migrate or clean up old proxy data; the game itself may discard unknown-prefab ZDOs when those areas load.
 
-- `ZoneSavior Terrain Proxy`: fills terrain to the marker height in a circle.
-- `ZoneSavior TerrainProxy Slope`: place a start marker and an end marker to create a saved slope.
-- `ZoneSavior Paint Proxy`: stores terrain paint in a circle and previews both its circular range and affected heightmap nodes.
-- `ZoneSavior Terrain Reset`: resets terrain height and paint in the radius and removes intersecting terrain, slope, and paint proxies. Press the terrain-tool modifier key (Alt by default) while directly placing it to switch to Paint Only mode, which resets only paint and removes only intersecting Paint Proxy objects.
+ZoneSavior also no longer increases the game's terrain height limit. Previously saved changes beyond the game's normal limit can look different unless every relevant client uses a compatible separate height-limit mod. Saving a terrain snapshot does not remove that requirement.
 
-Wheel controls:
-
-- Terrain Proxy: wheel changes radius, modifier+wheel changes edge softness.
-- TerrainProxy Slope: modifier+wheel changes width.
-- Paint Proxy: wheel changes radius, modifier+wheel changes paint type.
-- Terrain Reset: wheel changes radius; press the modifier key to switch between Terrain + Paint and Paint Only. Deselecting the tool or leaving the world restores Terrain + Paint.
-
-The active radius, slope width, edge softness, paint type, reset mode, and modifier hint are shown in the piece tooltip. Terrain Reset, Paint Proxy, and Paint Only Reset range outlines follow the loaded terrain surface, while Terrain Proxy keeps a flat outline at its target height. Paint Proxy and Paint Only Reset also show their exact affected-node grid. Grids above 2,048 visible nodes fall back to the circular outline instead of showing a partial grid.
-
-Reset preflights complete loaded terrain coverage, known intersecting proxy footprints, and ownership. If any known requirement is not loaded and ready, no terrain is changed and no proxy is removed; move closer to the affected area and try again.
-
-Terrain, paint, and slope proxies are persistent prefab objects. They can be captured by blueprint tools, then replay terrain changes when placed again.
+Zone bundle SupportFill terrain restoration remains part of ZoneSavior and is independent of blueprint terrain snapshots.
 
 ## Commands
 

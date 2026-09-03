@@ -13,7 +13,6 @@ internal static class ConfigSections
     public const string General = "01 - General";
     public const string ZoneSavior = "02 - ZoneSavior";
     public const string AutoArchive = "03 - Auto Archive";
-    public const string TerrainTool = "04 - Terrain Tool";
 }
 
 internal static class ConfigDescriptions
@@ -207,75 +206,4 @@ internal static class AutoArchiveConfig
                 new AcceptableValueRange<int>(1, 10000),
                 640));
     }
-}
-
-internal static class AdminTerrainToolConfig
-{
-    private static ConfigEntry<float> _radius = null!;
-    private static ConfigEntry<float> _slopeWidth = null!;
-    private static ConfigEntry<float> _terrainEdgeSoftness = null!;
-    private static ConfigEntry<AdminTerrainPaintType> _paintType = null!;
-    private static ConfigEntry<KeyboardShortcut> _terrainToolModifierKey = null!;
-
-    public static float Radius => Mathf.Clamp(_radius.Value, 0.5f, 128f);
-    public static float SlopeWidth => Mathf.Clamp(_slopeWidth.Value, 0.5f, 256f);
-    public static float TerrainEdgeSoftness => Mathf.Clamp01(_terrainEdgeSoftness.Value);
-    public static AdminTerrainPaintType PaintType => _paintType.Value;
-    public static KeyboardShortcut TerrainToolModifierKey => _terrainToolModifierKey.Value;
-
-    public static void Bind(ZoneSaviorPlugin plugin)
-    {
-        _radius = plugin.config(
-            ConfigSections.TerrainTool,
-            "Radius",
-            8f,
-            ConfigDescriptions.Ordered(
-                "Default circle radius for newly placed terrain proxy objects.",
-                new AcceptableValueRange<float>(0.5f, 128f),
-                500));
-        _slopeWidth = plugin.config(
-            ConfigSections.TerrainTool,
-            "Slope Width",
-            8f,
-            ConfigDescriptions.Ordered(
-                "Width in meters for the ZoneSavior TerrainProxy Slope created between two placed slope markers.",
-                new AcceptableValueRange<float>(0.5f, 256f),
-                490));
-        _terrainEdgeSoftness = plugin.config(
-            ConfigSections.TerrainTool,
-            "Terrain Edge Softness",
-            0f,
-            ConfigDescriptions.Ordered(
-                "Softness for ZoneSavior Terrain Proxy edges. 0 keeps a hard cylinder edge, 1 rounds the whole circle toward the edge.",
-                new AcceptableValueRange<float>(0f, 1f),
-                480));
-        _paintType = plugin.config(
-            ConfigSections.TerrainTool,
-            "Paint Type",
-            AdminTerrainPaintType.Dirt,
-            ConfigDescriptions.Ordered("Paint type for newly placed ZoneSavior Paint Proxy objects.", 470));
-        _terrainToolModifierKey = plugin.config(
-            ConfigSections.TerrainTool,
-            "Terrain Tool Modifier Key",
-            new KeyboardShortcut(KeyCode.LeftAlt),
-            ConfigDescriptions.Ordered(
-                "Client-only modifier key used with the mouse wheel for terrain tool adjustments and pressed to switch Terrain Reset mode.",
-                460),
-            synchronizedSetting: false);
-    }
-}
-
-internal enum AdminTerrainPaintType
-{
-    Grass = 0,
-    Dirt = 1,
-    Cultivated = 2,
-    Cultivate = Cultivated,
-    Paved = 3,
-    DarkGrass = 4,
-    PatchyGrass = 5,
-    MossyPaving = 6,
-    DirtPaving = 7,
-    DarkPaving = 8,
-    ClearVegetation = 10
 }

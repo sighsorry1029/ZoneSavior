@@ -246,13 +246,6 @@ internal static partial class ZoneBundleCommands
             return;
         }
 
-        if (request.Operation == LoadOperation && AdminTerrainTool.IsTerrainMutationControllerBusy)
-        {
-            onComplete(ZoneBundleCommandResult.Fail(
-                "A ZoneSavior terrain proxy batch is active. Retry the zone bundle load after it finishes."));
-            return;
-        }
-
         if (!TryBeginOperation(request.Operation, out int operationToken, out string busyReason))
         {
             onComplete(ZoneBundleCommandResult.Fail(busyReason));
@@ -278,9 +271,6 @@ internal static partial class ZoneBundleCommands
             onComplete(ZoneBundleCommandResult.Fail($"{request.Operation} could not start: {ex.Message}"));
         }
     }
-
-    internal static bool IsTerrainMutationActive =>
-        _activeOperationToken != 0 && _activeOperation == LoadOperation;
 
     internal static bool TryBeginOperation(string operation, out int token, out string reason)
     {
