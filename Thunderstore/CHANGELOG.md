@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.10
+
+- New zone bundle saves record one valid bottom-contact height per piece and the deepest negative offset from the original base terrain. Relocation selects the most common 0.25m contact-height band, aligns its first contact with destination base terrain, then applies the saved negative offset. All loaded zones share one placement height; manual offsets remain additive.
+- Preserved overlapping contact-height bands so stacked pieces do not hide the representative floor's first contact. Terrain support still uses the lowest contact in each cell and retains the existing +/-8m terrain limit.
+- Kept existing version 3 bundles readable with their previous placement behavior when the new metadata is missing. Re-save live structures to use the new placement rule. Original-location restore keeps the saved coordinates.
+- Extended the F8 zone outline with eight terrain-following, 64m corner extensions to make neighboring zone boundaries easier to estimate.
+- Simplified archive merging and zone bundle command flow, reduced support-grace cleanup allocations, and avoided redundant zone HUD text updates.
+- Added terrain-placement and serialization regression coverage, plus opt-in Debug deployment through `DeployToGame=true` with SHA-256 verification after DLL merging.
+
 ## 1.2.9
 
 - Breaking: Removed all ZoneSavior terrain proxy tools and prefab registrations, with no legacy aliases, replay support, automatic conversion, or world cleanup. Back up existing worlds and replace proxy-based blueprints with final-terrain snapshots captured using Infinity Hammer before upgrading.

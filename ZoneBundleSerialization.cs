@@ -268,6 +268,25 @@ internal static class ZoneBundleSerialization
             throw new InvalidDataException("Zone bundle contains terrain contacts that were not marked as captured.");
         }
 
+        List<float>? supportPieceHeights = bundle.SupportPieceRelativeHeights;
+        if (supportPieceHeights != null &&
+            (!bundle.TerrainContactsCaptured || supportPieceHeights.Count > bundle.Entries.Count ||
+             supportPieceHeights.Any(height => !IsFinite(height)) ||
+             (supportPieceHeights.Count > 0 && bundle.TerrainContacts.Count == 0)))
+        {
+            throw new InvalidDataException(
+                "Zone bundle support piece heights must be finite, captured, and associated with saved entries and terrain contacts.");
+        }
+
+        if (bundle.MinimumTerrainOffset is float minimumTerrainOffset &&
+            (!IsFinite(minimumTerrainOffset) || minimumTerrainOffset > 0f ||
+             !bundle.TerrainContactsCaptured || bundle.TerrainContacts.Count == 0 ||
+             supportPieceHeights == null || supportPieceHeights.Count == 0))
+        {
+            throw new InvalidDataException(
+                "Zone bundle minimum terrain offset must be finite and non-positive, with captured terrain contacts and support piece heights.");
+        }
+
         if (bundle.TerrainContacts.Count > MaxTerrainContactCount)
         {
             throw new InvalidDataException(

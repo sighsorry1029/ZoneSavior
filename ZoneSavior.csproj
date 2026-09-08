@@ -203,6 +203,23 @@
             <PackageDir>$(IntermediateOutputPath)Package\$(PackageName)</PackageDir>
         </PropertyGroup>
     </Target>
+    <Target Name="DeployDebugToGame" AfterTargets="GetAssemblyVersion"
+            Condition="'$(Configuration)' == 'Debug' And '$(DeployToGame)' == 'true'">
+        <Error Text="DeployToGame requires CopyOutputDLLPath to point to the game's BepInEx plugins folder."
+               Condition="'$(CopyOutputDLLPath)' == ''"/>
+        <Error Text="Final merged mod DLL was not produced: $(TargetPath)" Condition="!Exists('$(TargetPath)')"/>
+        <MakeDir Directories="$(CopyOutputDLLPath)"/>
+        <Copy SourceFiles="$(TargetPath)" DestinationFiles="$(CopyOutputDLLPath)\$(TargetFileName)"/>
+        <GetFileHash Files="$(TargetPath)" Algorithm="SHA256">
+            <Output TaskParameter="Hash" PropertyName="_DebugSourceHash"/>
+        </GetFileHash>
+        <GetFileHash Files="$(CopyOutputDLLPath)\$(TargetFileName)" Algorithm="SHA256">
+            <Output TaskParameter="Hash" PropertyName="_DebugDeployedHash"/>
+        </GetFileHash>
+        <Error Text="Deployed mod DLL SHA-256 does not match the final build."
+               Condition="'$(_DebugSourceHash)' != '$(_DebugDeployedHash)'"/>
+        <Message Importance="high" Text="Deployed $(TargetFileName) to $(CopyOutputDLLPath); SHA-256 verified: $(_DebugDeployedHash)"/>
+    </Target>
     <Target Name="UpdateManifestVersion" AfterTargets="GetAssemblyVersion" Condition=" ('$(Configuration)|$(Platform)' == 'Release|AnyCPU') And ('$(OS)' == 'Windows_NT') ">
         <Error Text="manifest.json not found in Thunderstore directory." Condition="!Exists('$(ThunderstorePackageRoot)\manifest.json')"/>
         <ItemGroup>

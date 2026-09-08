@@ -58,6 +58,133 @@ internal static partial class ZoneBundleTerrain
         return offsets.Count == 0 ? lowestOffset : GetMedianOffset(offsets);
     }
 
+    private static bool TryResolveRepresentativeSupportBaseWorldY(
+        List<TerrainSupportSample> samples,
+        List<float> supportPieceRelativeHeights,
+        float minimumTerrainOffset,
+        Func<float, float, float?> getTerrainBaseHeight,
+        out float baseWorldY)
+    {
+        baseWorldY = 0f;
+        if (samples.Count == 0 || supportPieceRelativeHeights.Count == 0 ||
+            float.IsNaN(minimumTerrainOffset) || float.IsInfinity(minimumTerrainOffset) || minimumTerrainOffset > 0f)
+        {
+            return false;
+        }
+
+        Dictionary<int, int> pieceCountsByPlane = [];
+        int dominantPlane = 0;
+        int dominantCount = 0;
+        foreach (float relativeY in supportPieceRelativeHeights)
+        {
+            if (float.IsNaN(relativeY) || float.IsInfinity(relativeY))
+            {
+                return false;
+            }
+
+            int plane = Mathf.RoundToInt(relativeY / SupportPlaneQuantization);
+            pieceCountsByPlane.TryGetValue(plane, out int count);
+            pieceCountsByPlane[plane] = ++count;
+            if (count > dominantCount || count == dominantCount && plane < dominantPlane)
+            {
+                dominantPlane = plane;
+                dominantCount = count;
+            }
+        }
+
+        float firstContactBaseY = float.NegativeInfinity;
+        foreach (TerrainSupportSample sample in samples)
+        {
+            if (Mathf.RoundToInt(sample.RelativeY / SupportPlaneQuantization) != dominantPlane)
+            {
+                continue;
+            }
+
+            // Descending as one rigid bundle: the first representative contact requires the largest base Y.
+            float? nativeHeight = getTerrainBaseHeight(sample.WorldX, sample.WorldZ);
+            if (!nativeHeight.HasValue || float.IsNaN(nativeHeight.Value) || float.IsInfinity(nativeHeight.Value))
+            {
+                return false;
+            }
+
+            firstContactBaseY = Mathf.Max(firstContactBaseY, nativeHeight.Value - sample.RelativeY);
+        }
+
+        float result = firstContactBaseY + minimumTerrainOffset;
+        if (float.IsNaN(result) || float.IsInfinity(result))
+        {
+            return false;
+        }
+
+        baseWorldY = result;
+        return true;
+    }
+
+    internal static IEnumerator CaptureMinimumTerrainOffsetAsync(
+        Vector2i zone,
+        float sourceBaseY,
+        IReadOnlyCollection<ZoneBundleTerrainContact> contacts,
+        Action<float?> onComplete)
+    {
+        if (contacts.Count == 0 || float.IsNaN(sourceBaseY) || float.IsInfinity(sourceBaseY))
+        {
+            onComplete(null);
+            yield break;
+        }
+
+        Vector3 zoneCenter = ZoneSystem.GetZonePos(zone);
+        float minimum = 0f;
+        int processedSinceYield = 0;
+        float lastX = float.NaN;
+        float lastZ = float.NaN;
+        float? nativeHeight = null;
+        foreach (ZoneBundleTerrainContact contact in contacts)
+        {
+            // Captured contacts are sorted by cell; overlapping height bands share a native-height query.
+            if (contact.LocalX != lastX || contact.LocalZ != lastZ)
+            {
+                nativeHeight = GetNativeTerrainHeight(zoneCenter.x + contact.LocalX, zoneCenter.z + contact.LocalZ);
+                lastX = contact.LocalX;
+                lastZ = contact.LocalZ;
+            }
+
+            if (!nativeHeight.HasValue)
+            {
+                onComplete(null);
+                yield break;
+            }
+
+            float offset = sourceBaseY + contact.RelativeY - nativeHeight.Value;
+            if (float.IsNaN(offset) || float.IsInfinity(offset))
+            {
+                onComplete(null);
+                yield break;
+            }
+
+            minimum = Mathf.Min(minimum, offset);
+            if (++processedSinceYield >= TerrainApplyNodeBatchSize)
+            {
+                processedSinceYield = 0;
+                yield return null;
+            }
+        }
+
+        onComplete((float)Math.Round(minimum, 3));
+    }
+
+    private static float? GetNativeTerrainHeight(float x, float z)
+    {
+        // Current Heightmap terrain may already be excavated; it cannot substitute for native terrain here.
+        if (WorldGenerator.instance == null || float.IsNaN(x) || float.IsInfinity(x) ||
+            float.IsNaN(z) || float.IsInfinity(z))
+        {
+            return null;
+        }
+
+        float height = WorldGenerator.instance.GetHeight(x, z);
+        return float.IsNaN(height) || float.IsInfinity(height) ? null : height;
+    }
+
     private static float ResolveFallbackSupportBaseWorldY(List<TerrainSupportSample> samples)
     {
         if (samples.Count == 0)
@@ -68,7 +195,7 @@ internal static partial class ZoneBundleTerrain
         Dictionary<int, List<TerrainSupportSample>> samplesByPlane = [];
         foreach (TerrainSupportSample sample in samples)
         {
-            int plane = Mathf.RoundToInt(sample.RelativeY / FallbackSupportPlaneQuantization);
+            int plane = Mathf.RoundToInt(sample.RelativeY / SupportPlaneQuantization);
             if (!samplesByPlane.TryGetValue(plane, out List<TerrainSupportSample> planeSamples))
             {
                 planeSamples = [];
@@ -487,18 +614,6 @@ internal static partial class ZoneBundleTerrain
     private static Vector3 ReadScale(ZDO zdo, GameObject prefab)
     {
         return zdo.GetVec3(ZDOVars.s_scaleHash, prefab.transform.localScale);
-    }
-
-    private readonly struct PlacementSupportSampleSet
-    {
-        public PlacementSupportSampleSet(bool usesSavedContacts, List<TerrainSupportSample> samples)
-        {
-            UsesSavedContacts = usesSavedContacts;
-            Samples = samples;
-        }
-
-        public bool UsesSavedContacts { get; }
-        public List<TerrainSupportSample> Samples { get; }
     }
 
     private readonly struct TerrainSupportSample

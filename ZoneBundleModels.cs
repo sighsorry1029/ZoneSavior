@@ -38,6 +38,10 @@ internal sealed class ZoneBundleFile
     public string Tag { get; set; } = "";
     public float SourceBaseY { get; set; }
     public bool TerrainContactsCaptured { get; set; }
+    // Null preserves legacy placement; zero or a negative value records depth below native source terrain.
+    public float? MinimumTerrainOffset { get; set; }
+    // One lowest valid contact height per supported piece, independent of its contact sample count.
+    public List<float>? SupportPieceRelativeHeights { get; set; }
     public List<ZoneBundleTerrainContact> TerrainContacts { get; set; } = [];
 
     [YamlIgnore]
@@ -139,6 +143,8 @@ internal sealed class TerrainSupportTarget
 {
     public Vector2i Zone { get; set; }
     public float SourceBaseY { get; set; }
+    public float? MinimumTerrainOffset { get; set; }
+    public List<float>? SupportPieceRelativeHeights { get; set; }
     public List<ZoneBundleEntry> Entries { get; set; } = [];
     public bool ContactsCaptured { get; set; }
     public List<ZoneBundleTerrainContact> Contacts { get; set; } = [];
@@ -186,6 +192,7 @@ internal sealed class ZoneBundleClientTerrainCaptureResponse
     public string RequestId { get; set; } = "";
     public bool Success { get; set; }
     public string Message { get; set; } = "";
+    public List<float>? SupportPieceRelativeHeights { get; set; }
     public List<ZoneBundleTerrainContact> Contacts { get; set; } = [];
 }
 

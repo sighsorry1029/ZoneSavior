@@ -485,6 +485,7 @@ internal static partial class ZoneBundleCommands
                 {
                     bundle.TerrainContactsCaptured = true;
                     bundle.TerrainContacts = terrainResponse.Contacts;
+                    bundle.SupportPieceRelativeHeights = terrainResponse.SupportPieceRelativeHeights;
                     terrainState = GetTerrainCaptureState(true, terrainResponse.Contacts.Count);
                 }
                 else if (!string.IsNullOrWhiteSpace(terrainCaptureFailure))
@@ -493,8 +494,24 @@ internal static partial class ZoneBundleCommands
                 }
             }
 
+            Exception? depthCaptureFailure = null;
+            if (bundle.SupportPieceRelativeHeights is { Count: > 0 })
+            {
+                // Compute source depth on the server from the final local or witness contacts.
+                yield return ZoneSaviorCoroutines.RunSafely(
+                    ZoneBundleTerrain.CaptureMinimumTerrainOffsetAsync(
+                        zone, bundle.SourceBaseY, bundle.TerrainContacts,
+                        value => bundle.MinimumTerrainOffset = value),
+                    exception => depthCaptureFailure = exception);
+            }
+
             try
             {
+                if (depthCaptureFailure != null)
+                {
+                    throw new InvalidOperationException("Source terrain depth capture failed.", depthCaptureFailure);
+                }
+
                 StoreCapturedBundle(tag, saveGeneration, manifest, zone, bundle, entryCount, monsterCount, terrainState, progress);
             }
             catch (Exception ex)
@@ -595,7 +612,7 @@ internal static partial class ZoneBundleCommands
         {
             Version = ZoneBundleManifest.CurrentVersion,
             Tag = tag,
-            World = GetWorldName(),
+            World = ZNet.instance.GetWorldName(),
             SavedAt = ZoneSaviorTimestamp.Now(),
             SourceRange = sourceRange
         };
@@ -619,54 +636,20 @@ internal static partial class ZoneBundleCommands
         ArchiveSaveProgress progress,
         string? message = null)
     {
-        return CreateArchiveResult(
-            success,
-            tag,
-            manifestPath,
-            manifest,
-            progress.TotalEntries,
-            progress.TotalMonsters,
-            progress.TerrainLoaded,
-            progress.TerrainCaptured,
-            message);
-    }
-
-    private static ZoneBundleArchiveResult CreateArchiveResult(
-        bool success,
-        string tag,
-        string manifestPath,
-        ZoneBundleManifest manifest,
-        int totalEntries,
-        int totalMonsters,
-        int terrainLoaded,
-        int terrainCaptured,
-        string? message = null)
-    {
         return new ZoneBundleArchiveResult
         {
             Success = success,
             Tag = tag,
             ManifestPath = manifestPath,
             ZoneCount = manifest.Bundles.Count,
-            EntryCount = totalEntries,
-            MonsterCount = totalMonsters,
-            TerrainLoaded = terrainLoaded,
-            TerrainCaptured = terrainCaptured,
-            Message = message ?? BuildArchiveSuccessMessage(tag, manifestPath, manifest, totalEntries, totalMonsters, terrainLoaded, terrainCaptured)
+            EntryCount = progress.TotalEntries,
+            MonsterCount = progress.TotalMonsters,
+            TerrainLoaded = progress.TerrainLoaded,
+            TerrainCaptured = progress.TerrainCaptured,
+            Message = message ??
+                $"Saved {manifest.Bundles.Count} zone bundle(s) for tag '{tag}' to '{Path.GetDirectoryName(manifestPath)}' " +
+                $"(entries: {progress.TotalEntries}, monsters: {progress.TotalMonsters}, terrain contacts: {progress.TerrainCaptured}/{manifest.Bundles.Count}, terrain loaded: {progress.TerrainLoaded}/{manifest.Bundles.Count}, mode: SupportFill)."
         };
-    }
-
-    private static string BuildArchiveSuccessMessage(
-        string tag,
-        string manifestPath,
-        ZoneBundleManifest manifest,
-        int totalEntries,
-        int totalMonsters,
-        int terrainLoaded,
-        int terrainCaptured)
-    {
-        return $"Saved {manifest.Bundles.Count} zone bundle(s) for tag '{tag}' to '{Path.GetDirectoryName(manifestPath)}' " +
-               $"(entries: {totalEntries}, monsters: {totalMonsters}, terrain contacts: {terrainCaptured}/{manifest.Bundles.Count}, terrain loaded: {terrainLoaded}/{manifest.Bundles.Count}, mode: SupportFill).";
     }
 
     private sealed class ArchiveSaveProgress
@@ -925,6 +908,77 @@ internal static partial class ZoneBundleCommands
             $"(removed: {totals.Removed}, created: {totals.Created}, terrain: {totals.TerrainApplied}/{work.Count}, mode: SupportFill{terrainPreparation.Describe()}, yOffset: {Round(request.YOffset)})."));
     }
 
+    internal static IEnumerator RestoreTagToOriginalZonesAsync(ZoneBundleCommandRequest request, Action<ZoneBundleCommandResult> onComplete, long terrainAssistPeer)
+    {
+        string tag = request.Tag;
+        ZoneBundleManifest manifest;
+        try
+        {
+            manifest = ZoneBundleStore.LoadManifest(tag);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError($"Zone bundle async archive restore failed: {ex}");
+            onComplete(ZoneBundleCommandResult.Fail(ex.Message));
+            yield break;
+        }
+
+        if (manifest.Bundles.Count == 0)
+        {
+            onComplete(ZoneBundleCommandResult.Fail($"Manifest for tag '{tag}' contains no zone bundles."));
+            yield break;
+        }
+
+        List<LoadWorkItem> work = [];
+        long totalEntries = 0L;
+        long totalTerrainContacts = 0L;
+        long totalDataCharacters = 0L;
+        foreach (ZoneBundleManifestEntry entry in manifest.Bundles)
+        {
+            Vector2i sourceZone = ToVector2i(entry.Zone);
+            if (!ZoneBundleStore.TryLoadBundleFromManifestEntry(tag, entry, out ZoneBundleFile bundle, out string bundleReason))
+            {
+                _logger.LogError($"Zone bundle async archive restore failed: {bundleReason}");
+                onComplete(ZoneBundleCommandResult.Fail(bundleReason));
+                yield break;
+            }
+
+            if (!TryAddArchiveLoadBudget(
+                    bundle,
+                    ref totalEntries,
+                    ref totalTerrainContacts,
+                    ref totalDataCharacters,
+                    out string budgetError))
+            {
+                _logger.LogError($"Zone bundle async archive restore failed: {budgetError}");
+                onComplete(ZoneBundleCommandResult.Fail(budgetError));
+                yield break;
+            }
+
+            work.Add(new LoadWorkItem(sourceZone, bundle));
+            yield return null;
+        }
+
+        ZoneLoadTotals totals = default;
+        TerrainPreparationResult terrainPreparation = default;
+        string restoreError = "";
+        yield return PrepareAndApplyLoadWorkAsync("Zone bundle async archive restore failed", work, exactSource: true, 0f, terrainAssistPeer, (loadTotals, preparation, error) =>
+        {
+            totals = loadTotals;
+            terrainPreparation = preparation;
+            restoreError = error;
+        });
+        if (!string.IsNullOrWhiteSpace(restoreError))
+        {
+            onComplete(ZoneBundleCommandResult.Fail(restoreError));
+            yield break;
+        }
+
+        onComplete(ZoneBundleCommandResult.Ok(
+            $"Restored {work.Count} archived zone bundle(s) for tag '{tag}' " +
+            $"(removed: {totals.Removed}, created: {totals.Created}, terrain: {totals.TerrainApplied}/{work.Count}{terrainPreparation.Describe()})."));
+    }
+
     private static bool TryAddArchiveLoadBudget(
         ZoneBundleFile bundle,
         ref long totalEntries,
@@ -988,7 +1042,9 @@ internal static partial class ZoneBundleCommands
                 SourceBaseY = item.Bundle.SourceBaseY,
                 Entries = item.Bundle.Entries,
                 ContactsCaptured = item.Bundle.TerrainContactsCaptured,
-                Contacts = item.Bundle.TerrainContacts
+                Contacts = item.Bundle.TerrainContacts,
+                MinimumTerrainOffset = item.Bundle.MinimumTerrainOffset,
+                SupportPieceRelativeHeights = item.Bundle.SupportPieceRelativeHeights
             }), value => context = value);
         }
 
@@ -1412,10 +1468,12 @@ internal static partial class ZoneBundleCommands
                 zone,
                 request.SourceBaseY,
                 request.Entries,
-                out bool contactsCaptured);
+                out bool contactsCaptured,
+                out List<float>? supportPieceRelativeHeights);
 
             response.Success = contactsCaptured;
             response.Contacts = contacts;
+            response.SupportPieceRelativeHeights = supportPieceRelativeHeights;
             response.Message = contactsCaptured
                 ? $"Client captured {contacts.Count} terrain contact(s) for zone ({zone.x},{zone.y})."
                 : $"Client source zone ({zone.x},{zone.y}) is not loaded for terrain contact capture.";
@@ -1833,7 +1891,8 @@ internal static partial class ZoneBundleCommands
         List<ZoneBundleEntry> zoneEntries,
         Dictionary<long, string> creatorNames,
         List<ZoneBundleTerrainContact> terrainContacts,
-        bool contactsCaptured)
+        bool contactsCaptured,
+        List<float>? supportPieceRelativeHeights)
     {
         return new ZoneBundleFile
         {
@@ -1842,6 +1901,7 @@ internal static partial class ZoneBundleCommands
             SourceBaseY = useRelativePlacement ? sourceAnchor.BaseWorldY : 0f,
             TerrainContactsCaptured = contactsCaptured,
             TerrainContacts = terrainContacts,
+            SupportPieceRelativeHeights = supportPieceRelativeHeights,
             SourceZoneCreators = BuildSourceZoneCreators(creatorNames),
             Entries = zoneEntries
                 .OrderBy(entry => entry.Prefab, StringComparer.Ordinal)
@@ -1865,7 +1925,8 @@ internal static partial class ZoneBundleCommands
             zone,
             sourceAnchor.BaseWorldY,
             zoneEntries,
-            out bool contactsCaptured);
+            out bool contactsCaptured,
+            out List<float>? supportPieceRelativeHeights);
 
         terrainState = GetTerrainCaptureState(contactsCaptured, terrainContacts.Count);
         return CreateCapturedBundle(
@@ -1875,7 +1936,8 @@ internal static partial class ZoneBundleCommands
             zoneEntries,
             creatorNames,
             terrainContacts,
-            contactsCaptured);
+            contactsCaptured,
+            supportPieceRelativeHeights);
     }
 
     private static ZoneBundleTerrainCaptureState GetTerrainCaptureState(bool contactsCaptured, int contactCount)
@@ -1960,25 +2022,6 @@ internal static partial class ZoneBundleCommands
         float yOffset,
         ZoneLoadIssueSummary issues)
     {
-        if (!TryCreateLoadedZdo(entry, zoneCenter, bundle, terrainContext, yOffset, issues, out ZDO? zdo) || zdo == null)
-        {
-            return false;
-        }
-
-        ZNetScene.instance.CreateObject(zdo);
-        return true;
-    }
-
-    private static bool TryCreateLoadedZdo(
-        ZoneBundleEntry entry,
-        Vector3 zoneCenter,
-        ZoneBundleFile bundle,
-        TerrainPlacementContext? terrainContext,
-        float yOffset,
-        ZoneLoadIssueSummary issues,
-        out ZDO? zdo)
-    {
-        zdo = null;
         GameObject prefab = ZNetScene.instance.GetPrefab(entry.Prefab);
         if (!prefab)
         {
@@ -2000,8 +2043,14 @@ internal static partial class ZoneBundleCommands
         DataEntry data = entry.RuntimeData ?? (string.IsNullOrEmpty(entry.Data) ? new DataEntry() : new DataEntry(entry.Data));
         SanitizeForLoad(prefab, data);
 
-        zdo = DataHelper.Init(prefab, position, rotation, scale, data);
-        return zdo != null;
+        ZDO? zdo = DataHelper.Init(prefab, position, rotation, scale, data);
+        if (zdo == null)
+        {
+            return false;
+        }
+
+        ZNetScene.instance.CreateObject(zdo);
+        return true;
     }
 
 }

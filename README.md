@@ -15,6 +15,8 @@ It can:
 - track player activity for inactive-owner cleanup
 - provide an optional client zone UI
 
+The zone UI hotkey (F8 by default) displays the current zone boundary with eight 64m corner extensions. The lines follow the terrain, with height samples every 4m, to help estimate neighboring zones.
+
 ## Files
 
 ZoneSavior uses one BepInEx config file and one data folder:
@@ -89,6 +91,10 @@ Auto archive candidate detection only starts from creator-linked WearNTear with 
 ZoneSavior uses SupportFill terrain restore.
 
 When saving a loaded zone, it samples the lower footprint of saved structures and records terrain contacts where terrain is close enough to the structure bottom. When loading, those contacts can raise or cut terrain so structures regain support.
+
+New saves also record one lowest valid contact height per touching piece and the lowest non-positive height difference from the original, unmodified terrain. For relocation, the most frequent piece contact height band (0.25m bands; ties prefer the lower band) selects the representative floor. The bundle is aligned at the first contact between that floor and the destination's unmodified terrain, then the saved negative terrain offset is applied. A large piece receives one vote, just like a small piece. Contacts in overlapping height bands are retained for alignment; support terrain still uses the lowest contact in each cell. All zones loaded together share one placement height; `offset=Y` adds a further adjustment.
+
+Existing version 3 bundles remain readable. If any participating support zone lacks the new placement metadata, the entire load keeps its previous placement calculation; re-save the live structures to use the new rule. Original-location `restore` keeps the saved coordinates. The terrain's existing +/-8m limit still applies, so a different slope can leave some structures buried or unsupported.
 
 If exact contacts are missing, ZoneSavior falls back to saved collider/footprint data and places terrain near the lowest reasonable support plane. The fallback is clamped to avoid extreme spikes.
 

@@ -11,7 +11,7 @@ internal static partial class ZoneBundleTerrain
     private const float SearchRadius = 48f;
     private const float SupportFillSampleStep = 1f;
     private const float SupportFillClearance = 0.05f;
-    private const float FallbackSupportPlaneQuantization = 0.25f;
+    internal const float SupportPlaneQuantization = 0.25f;
     private const float FallbackColliderSampleStep = 0.5f;
     private const float FallbackMaxColliderDepthBelowOrigin = 8f;
     private const float FallbackMaxTerrainDelta = 16f;
@@ -91,7 +91,11 @@ internal static partial class ZoneBundleTerrain
 
     public static IEnumerator CreateSupportFillPlacementContextAsync(IEnumerable<TerrainSupportTarget> targets, Action<TerrainPlacementContext?> onComplete)
     {
-        List<PlacementSupportSampleSet> sampleSets = [];
+        List<TerrainSupportSample> allSamples = [];
+        List<float> supportPieceRelativeHeights = [];
+        float minimumTerrainOffset = 0f;
+        bool hasCompletePlacementMetadata = true;
+        bool hasSavedContacts = false;
         foreach (TerrainSupportTarget target in targets.ToList())
         {
             bool usesSavedContacts = target.ContactsCaptured && target.Contacts.Count > 0;
@@ -107,28 +111,54 @@ internal static partial class ZoneBundleTerrain
 
             if (samples.Count > 0)
             {
-                sampleSets.Add(new PlacementSupportSampleSet(usesSavedContacts, samples));
+                allSamples.AddRange(samples);
+                hasSavedContacts |= usesSavedContacts;
+                // One shared placement rule for the entire load, including mixed old/new archives.
+                if (usesSavedContacts && target.MinimumTerrainOffset is float offset &&
+                    !float.IsNaN(offset) && !float.IsInfinity(offset) && offset <= 0f &&
+                    target.SupportPieceRelativeHeights is { Count: > 0 })
+                {
+                    minimumTerrainOffset = Mathf.Min(minimumTerrainOffset, offset);
+                    supportPieceRelativeHeights.AddRange(target.SupportPieceRelativeHeights);
+                }
+                else
+                {
+                    hasCompletePlacementMetadata = false;
+                }
             }
 
             yield return null;
         }
 
-        onComplete(BuildSupportFillPlacementContext(sampleSets));
+        onComplete(BuildSupportFillPlacementContext(
+            allSamples,
+            hasSavedContacts,
+            hasCompletePlacementMetadata ? supportPieceRelativeHeights : null,
+            minimumTerrainOffset));
     }
 
-    private static TerrainPlacementContext? BuildSupportFillPlacementContext(List<PlacementSupportSampleSet> sampleSets)
+    private static TerrainPlacementContext? BuildSupportFillPlacementContext(
+        List<TerrainSupportSample> samples,
+        bool hasSavedContacts,
+        List<float>? supportPieceRelativeHeights = null,
+        float minimumTerrainOffset = 0f)
     {
-        List<TerrainSupportSample> samples = sampleSets.SelectMany(set => set.Samples).ToList();
         if (samples.Count == 0)
         {
             return null;
         }
 
         List<TerrainSupportSample> footprintSamples = CollapseToLowestSupportSamples(samples);
-        bool hasSavedContacts = sampleSets.Any(set => set.UsesSavedContacts);
-        float baseWorldY = hasSavedContacts
-            ? ResolveSupportFillBaseWorldY(footprintSamples)
-            : ResolveFallbackSupportBaseWorldY(footprintSamples);
+        float baseWorldY;
+        if (supportPieceRelativeHeights == null ||
+            !TryResolveRepresentativeSupportBaseWorldY(
+                samples, supportPieceRelativeHeights, minimumTerrainOffset,
+                GetNativeTerrainHeight, out baseWorldY))
+        {
+            baseWorldY = hasSavedContacts
+                ? ResolveSupportFillBaseWorldY(footprintSamples)
+                : ResolveFallbackSupportBaseWorldY(footprintSamples);
+        }
 
         TerrainPlacementContext context = new()
         {
@@ -158,9 +188,15 @@ internal static partial class ZoneBundleTerrain
         };
     }
 
-    public static List<ZoneBundleTerrainContact> CaptureSupportContacts(Vector2i zone, float sourceBaseY, IEnumerable<ZoneBundleEntry> entries, out bool contactsCaptured)
+    public static List<ZoneBundleTerrainContact> CaptureSupportContacts(
+        Vector2i zone,
+        float sourceBaseY,
+        IEnumerable<ZoneBundleEntry> entries,
+        out bool contactsCaptured,
+        out List<float>? supportPieceRelativeHeights)
     {
         contactsCaptured = false;
+        supportPieceRelativeHeights = null;
         List<ZoneBundleTerrainContact> contacts = [];
         if (float.IsNaN(sourceBaseY) || !TryGetHeightmap(zone, out _))
         {
@@ -170,7 +206,12 @@ internal static partial class ZoneBundleTerrain
         contactsCaptured = true;
         List<TerrainWorldContact> worldContacts = ZoneTerrainContactSampler.CaptureWorldContacts(
             ZoneTerrainContactSampler.FromZoneEntries(zone, sourceBaseY, entries),
-            ZoneBundleConfig.SupportFillContactTolerance);
+            sourceBaseY,
+            ZoneBundleConfig.SupportFillContactTolerance,
+            out List<float> supportPieceWorldHeights);
+        supportPieceRelativeHeights = supportPieceWorldHeights
+            .Select(height => Mathf.Round((height - sourceBaseY) * 1000f) / 1000f)
+            .ToList();
         return ZoneTerrainContactSampler.ToZoneBundleContacts(zone, sourceBaseY, worldContacts);
     }
 

@@ -12,7 +12,7 @@ namespace ZoneSavior;
 public class ZoneSaviorPlugin : BaseUnityPlugin
 {
     internal const string ModName = "ZoneSavior";
-    internal const string ModVersion = "1.2.9";
+    internal const string ModVersion = "1.2.10";
     internal const string Author = "sighsorry";
     internal const string ModGUID = $"{Author}.{ModName}";
     internal const string DataStorageFolder = "ZoneSavior";

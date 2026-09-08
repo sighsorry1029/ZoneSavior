@@ -207,10 +207,26 @@ internal static class ZoneBundleSupportGrace
 
     private static void RemoveExpired(DateTime now)
     {
-        foreach (Vector2i zone in GraceUntilUtc
-                     .Where(item => item.Value <= now)
-                     .Select(item => item.Key)
-                     .ToList())
+        if (GraceUntilUtc.Count == 0)
+        {
+            return;
+        }
+
+        List<Vector2i>? expired = null;
+        foreach (KeyValuePair<Vector2i, DateTime> item in GraceUntilUtc)
+        {
+            if (item.Value <= now)
+            {
+                (expired ??= []).Add(item.Key);
+            }
+        }
+
+        if (expired == null)
+        {
+            return;
+        }
+
+        foreach (Vector2i zone in expired)
         {
             GraceUntilUtc.Remove(zone);
         }

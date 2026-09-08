@@ -6,9 +6,14 @@ namespace ZoneSavior;
 
 internal static class ZoneTerrainContactSampler
 {
-    public static List<TerrainWorldContact> CaptureWorldContacts(IEnumerable<TerrainContactSource> sources, float tolerance)
+    public static List<TerrainWorldContact> CaptureWorldContacts(
+        IEnumerable<TerrainContactSource> sources,
+        float sourceBaseY,
+        float tolerance,
+        out List<float> supportPieceWorldHeights)
     {
-        Dictionary<long, TerrainWorldContact> lowestContactByCell = [];
+        supportPieceWorldHeights = [];
+        Dictionary<(long Cell, int Plane), TerrainWorldContact> lowestContactByCellAndPlane = [];
         Dictionary<long, float> terrainHeightByCell = [];
         foreach (TerrainContactSource source in sources)
         {
@@ -17,6 +22,7 @@ internal static class ZoneTerrainContactSampler
                 continue;
             }
 
+            float lowestPieceContactY = float.PositiveInfinity;
             foreach (TerrainWorldContact candidate in ZoneBundleTerrain.CollectWearNTearWorldSupportCandidates(
                          source.Prefab,
                          source.Position,
@@ -37,16 +43,25 @@ internal static class ZoneTerrainContactSampler
                     continue;
                 }
 
-                if (!lowestContactByCell.TryGetValue(key, out TerrainWorldContact existing) || candidate.WorldY < existing.WorldY)
+                lowestPieceContactY = Mathf.Min(lowestPieceContactY, candidate.WorldY);
+                int plane = Mathf.RoundToInt(Round(candidate.WorldY - sourceBaseY) / ZoneBundleTerrain.SupportPlaneQuantization);
+                (long Cell, int Plane) contactKey = (key, plane);
+                if (!lowestContactByCellAndPlane.TryGetValue(contactKey, out TerrainWorldContact existing) || candidate.WorldY < existing.WorldY)
                 {
-                    lowestContactByCell[key] = candidate;
+                    lowestContactByCellAndPlane[contactKey] = candidate;
                 }
+            }
+
+            if (!float.IsPositiveInfinity(lowestPieceContactY))
+            {
+                supportPieceWorldHeights.Add(lowestPieceContactY);
             }
         }
 
-        return lowestContactByCell.Values
+        return lowestContactByCellAndPlane.Values
             .OrderBy(contact => contact.WorldZ)
             .ThenBy(contact => contact.WorldX)
+            .ThenBy(contact => contact.WorldY)
             .ToList();
     }
 
@@ -89,6 +104,7 @@ internal static class ZoneTerrainContactSampler
             })
             .OrderBy(contact => contact.LocalZ)
             .ThenBy(contact => contact.LocalX)
+            .ThenBy(contact => contact.RelativeY)
             .ToList();
     }
 

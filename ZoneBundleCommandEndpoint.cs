@@ -107,3 +107,60 @@ internal static class ZoneBundleCommandEndpoint
         ZoneBundleCommands.ShowResult(result, Console.instance);
     }
 }
+
+internal static partial class ZoneBundleCommands
+{
+    internal static void EnsureCommandAllowed()
+    {
+        if (!ZNet.instance || !ZNetScene.instance || !ZoneSystem.instance || ZDOMan.instance == null)
+        {
+            throw new InvalidOperationException("World is not ready.");
+        }
+
+        if (!ZNet.instance.IsServer())
+        {
+            if (ZRoutedRpc.instance == null)
+            {
+                throw new InvalidOperationException("Server RPC is not ready.");
+            }
+
+            return;
+        }
+
+        if (ZNet.instance.IsServer() && Player.m_localPlayer == null)
+        {
+            return;
+        }
+
+        if (!ZNet.instance.LocalPlayerIsAdminOrHost())
+        {
+            throw new InvalidOperationException("Admin only.");
+        }
+    }
+
+    internal static bool IsAuthorizedSender(long sender)
+    {
+        ZNetPeer peer = ZNet.instance.GetPeer(sender);
+        string hostName = peer?.m_rpc?.m_socket?.GetHostName() ?? "";
+        return hostName.Length > 0 && ZNet.instance.IsAdmin(hostName);
+    }
+
+    internal static void ShowResult(ZoneBundleCommandResult result, Terminal? terminal = null)
+    {
+        _logger.LogInfo(result.Message);
+
+        if (terminal != null)
+        {
+            terminal.AddString(result.Message);
+        }
+        else if (Console.instance != null)
+        {
+            Console.instance.AddString(result.Message);
+        }
+
+        if (Player.m_localPlayer != null)
+        {
+            Player.m_localPlayer.Message(result.Success ? MessageHud.MessageType.TopLeft : MessageHud.MessageType.Center, result.Message);
+        }
+    }
+}

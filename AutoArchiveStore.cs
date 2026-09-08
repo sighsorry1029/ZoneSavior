@@ -467,6 +467,12 @@ internal static class AutoArchiveStore
 
     private static void MergePlayerRecords(PlayerActivityRecord target, PlayerActivityRecord duplicate)
     {
+        MergePlayerRecordContents(target, duplicate);
+        State.Players.Remove(duplicate);
+    }
+
+    private static void MergePlayerRecordContents(PlayerActivityRecord target, PlayerActivityRecord duplicate)
+    {
         foreach (long id in duplicate.PlayerIds)
         {
             AddDistinct(target.PlayerIds, id);
@@ -481,8 +487,6 @@ internal static class AutoArchiveStore
         {
             target.LastSeenUtc = duplicate.LastSeenUtc;
         }
-
-        State.Players.Remove(duplicate);
     }
 
     private static void RebuildPlayerIndexes()
@@ -526,21 +530,7 @@ internal static class AutoArchiveStore
                                            GetPlatformIdentityPriority(target);
                     PlayerActivityRecord canonical = preferDuplicate ? duplicate : target;
                     PlayerActivityRecord other = preferDuplicate ? target : duplicate;
-                    foreach (long id in other.PlayerIds)
-                    {
-                        AddDistinct(canonical.PlayerIds, id);
-                    }
-
-                    foreach (string name in other.Names)
-                    {
-                        AddDistinct(canonical.Names, name);
-                    }
-
-                    if (other.LastSeenUtc > canonical.LastSeenUtc)
-                    {
-                        canonical.LastSeenUtc = other.LastSeenUtc;
-                    }
-
+                    MergePlayerRecordContents(canonical, other);
                     state.Players.RemoveAt(preferDuplicate ? targetIndex : duplicateIndex);
                     merged = true;
                     break;
