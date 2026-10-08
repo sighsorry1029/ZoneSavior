@@ -6,6 +6,8 @@ Archive inactive-player structures and tamed animals per zone, save/load/restore
 
 ZoneSavior is a Valheim server maintenance mod for zone-based cleanup, archive, restore, and build-count control.
 
+ZoneSavior **1.3.0** builds against original Valheim **1.0.16** game assemblies and requires BepInExPack Valheim **5.4.2351**. It includes a pinned ServerSync compatibility build. Existing ZoneSavior config keys, RPC formats and bundle payload format remain unchanged. New automatic archives use manifest version 3 to distinguish saved zones from reset zones; these manifests require ZoneSavior 1.3.0 or later. Manual archives keep manifest version 2, and existing manifest version 2/bundle version 3 archives remain readable. Update the server and clients running ZoneSavior together to satisfy the existing synchronized-version requirement.
+
 It can:
 
 - archive inactive player structures into zone bundle files
@@ -40,7 +42,7 @@ BepInEx/config/
 
 `ZoneBundles/<tag>/manifest.yml` records the archive shape. Each `bundleNNN_<generation>.zonebundle.yml.gz` stores one source zone as a compact, gzip-compressed YAML bundle. ZoneSavior reads and writes these files directly; no manual extraction is required. New bundle files are committed by replacing the manifest only after every zone is saved successfully.
 
-Previous manifest and bundle versions, including uncompressed legacy zone bundles, are not loaded or converted. If the original world data is still available, create a new archive from the live world with the current ZoneSavior version before restoring it.
+Manifest versions 2 and 3 and compressed bundle payload version 3 are supported. Older formats, including uncompressed legacy zone bundles, are not loaded or converted. If the original world data is still available, create a new archive from the live world with the current ZoneSavior version before restoring it.
 
 `Diagnostics/` contains YAML reports written by `zs_debugzone`.
 
@@ -59,8 +61,8 @@ Config sections:
   - `Zone Bundle Support Fill Feather Width`: blend width around restored support terrain.
 - `03 - Auto Archive`
   - `Dry Run`: report only.
-  - `Reset After Save`: reset eligible source zones after saving.
-  - `Minimum Pieces Per Cluster`: small clusters are skipped, or reset without save during reset runs.
+  - `Reset After Save`: reset source zones whose creators are all eligible after saving. Connected mixed-owner zones are saved and kept.
+  - `Minimum Pieces Per Cluster`: counts only eligible owners' structures. Small mixed-owner clusters are skipped; small clusters containing only eligible owners retain reset-without-save behavior during reset runs.
   - `Inactive Days`: owner inactivity threshold.
   - `Scan Interval Minutes`: automatic scan interval. `0` disables scheduled scans.
   - `Scanner Batch Size`: ZDOs inspected before yielding a frame.
@@ -85,6 +87,12 @@ Skipped:
 - WearNTear prefabs without normal build recipes/resource costs
 
 Auto archive candidate detection only starts from creator-linked WearNTear with `creator != 0`. `WearNTear Save Mode = IncludeCreatorless` can include nearby creatorless WearNTear during the save step, but creatorless structures alone do not make a zone eligible for inactive-owner cleanup.
+
+Automatic archives keep structures together across owner boundaries. Adjacent zones (including diagonals) containing only eligible creators form the reset core. Mixed-owner neighbors join the same archive when they share an eligible creator with a connected zone. This can continue across several mixed zones, but an active or protected creator alone cannot connect additional zones. A normal scan requires at least one core zone, so retained mixed zones do not create a fresh archive after the core has been reset. There is no separate aggressive mode.
+
+For adjacent zones `[A+B] [B+C] [C]`, with A/B eligible and C active, one tag saves both `[A+B]` and `[B+C]`. Only `[A+B]` is reset; `[B+C]` and `[C]` remain. The saved `[B+C]` snapshot contains all normally saved structures and tamed animals in that zone, including C's objects. Eligibility, recipe/save filters, minimum count and per-run limits still apply.
+
+Before and during a saved reset, the server rechecks the saved state of creator-owned objects and tamed animals. Added/changed objects, changed container payloads or unexplained disappearances stop the affected reset. Normal inactivity scans also recheck eligibility and stop on a reconnect; an explicit Steam ID remains an administrator override of owner inactivity/protection. Spawned-object chains cannot delete outside the reset zone. The manifest records intent immediately before mutation and records each successfully reset zone separately. A failed preflight leaves the zone intact; an interrupted reset after mutation leaves a pending marker and blocks loading that tag until the partial world state has been reviewed. This is a conservative stop, not an automatic rollback.
 
 ## Terrain Restore
 
@@ -151,11 +159,13 @@ Notes:
 
 - Without `source`, ZoneSavior loads every bundle in the tag manifest and preserves the saved shape.
 - `source (x,z)` loads only one saved source zone from the manifest.
-- `restore` loads every saved bundle back to its original source zone.
+- `restore` loads manual and older archives back to all saved source zones. For new automatic reset archives it restores only zones recorded as successfully reset, leaving saved-only mixed zones intact. For new automatic save-only archives it restores only the eligible core zones.
 - `to (x,z)` is the target anchor.
 - If `to (x,z)` is omitted, ZoneSavior uses the local player's current zone.
 - `offset=Y` adds a vertical offset after the support anchor is calculated.
 - `restore` does not accept `to (x,z)` or an offset.
+- Relocating a new automatic archive still loads the whole saved shape, including mixed zones and their other owners' objects. It is a copy: the retained source zones remain. Choose the destination with that in mind, especially for containers and tamed animals. Loading onto a retained source zone in the same world is rejected, including single-source loads; world identity uses the world UID.
+- New automatic archives reject clearing a target when its Spawned-object chain extends outside the complete load target set. Normal structural stability and terrain effects at a zone edge still require in-game verification.
 
 ### `zs_scan`
 
@@ -193,6 +203,8 @@ zs_status
 
 The console prints a short summary and the generated report path.
 
+Cluster records distinguish `zones` (saved scope), `resetZones` (planned reset scope), `backupOnlyZones`, `resetCompletedZones` and `resetSkippedZones`. `zs_scan dry` reports the planned save/reset/keep counts without changing the world.
+
 ### `zs_debugzone`
 
 Write a YAML diagnostic report explaining one zone's auto archive eligibility.
@@ -208,6 +220,8 @@ zs_debugzone (-7,12)
 ```
 
 Reports are written under `BepInEx/config/ZoneSavior/Diagnostics/`.
+
+The zone report distinguishes a reset candidate (`wouldBeCandidateZone`) from a possible saved-only neighbor (`mayBeBackupOnlyZone`). A single-zone report cannot establish the connecting cluster; use `zs_scan dry` for that decision.
 
 ## Common Workflows
 
@@ -249,5 +263,20 @@ Restore an archive to its original zones:
 ```text
 zs_loadzone auto_halla_c178 restore
 ```
+## Development verification
+
+Build and update the local game plugin after merging:
+
+```powershell
+dotnet build ZoneSavior.csproj -c Debug -p:DeployToGame=true
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/Run-GameCompatibility.ps1
+```
+
+`Run-GameCompatibility.ps1` runs the existing 155 structure and 560 terrain-placement assertions, automatic-archive planning/manifest/restore and state-change regressions, plus original-API, Harmony-binding, cached-access and ZDO-codec checks in a disposable process using the installed Unity Mono runtime. Use `-GameManaged <original dedicated-server Managed directory>` for the server assembly set. Temporary test artifacts are retained and their path is printed. No Unity scene, real socket, world or native Harmony detour is started. Windows PowerShell's CLR cannot load every new game type; use this Mono runner for the complete suite rather than the older standalone terrain test host.
+
+The separate ServerSync source/build provenance is in `Libs/ServerSync.Compatibility.md`. Actual client/host/dedicated gameplay still needs confirmation: startup, F8, build limits, save/reset/restore including portals and container contents, terrain placement on both slope directions, non-admin rejection, reconnect and settings synchronization.
+
+For mixed-owner archives, verify the `[A+B] [B+C] [C]` case on a disposable world copy: compare the saved entries, retained container contents and tamed animals, reset exactly the first zone, then restore only that zone. Also check `source` and full relocation, a reconnect/content change during saving, cross-zone Spawned links, and interruption before/after the first deletion. A retained building may depend on support in the reset zone; automatic-archive membership does not identify structural dependencies or freeze the game's collapse simulation.
+
 ## Github
 https://github.com/sighsorry1029/ZoneSavior

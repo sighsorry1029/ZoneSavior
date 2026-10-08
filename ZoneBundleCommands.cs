@@ -228,7 +228,7 @@ internal static partial class ZoneBundleCommands
             return;
         }
 
-        long serverPeer = ZRoutedRpc.instance.GetServerPeerID();
+        long serverPeer = ZoneRpcRegistrar.ServerPeerId;
         if (serverPeer == 0L || _announcedTerrainWitnessServer == serverPeer)
         {
             return;
@@ -419,7 +419,9 @@ internal static partial class ZoneBundleCommands
         onComplete(result);
     }
 
-    internal static IEnumerator SaveZonesAsync(IEnumerable<Vector2i> sourceZones, string tag, Action<ZoneBundleArchiveResult> onComplete, long terrainAssistPeer = 0L)
+    internal static IEnumerator SaveZonesAsync(IEnumerable<Vector2i> sourceZones, string tag, Action<ZoneBundleArchiveResult> onComplete,
+        long terrainAssistPeer = 0L, IEnumerable<Vector2i>? resetEligibleZones = null, bool resetAfterSave = false,
+        Func<Vector2i, ZDO, bool>? canCaptureObject = null)
     {
         List<Vector2i> zones = NormalizeZones(sourceZones);
 
@@ -435,6 +437,28 @@ internal static partial class ZoneBundleCommands
         }
 
         ZoneBundleManifest manifest = CreateManifest(tag, zones, out string manifestPath);
+        if (resetEligibleZones != null)
+        {
+            List<Vector2i> eligible = NormalizeZones(resetEligibleZones);
+            HashSet<Vector2i> saved = zones.ToHashSet();
+            if (eligible.Count == 0 || eligible.Any(zone => !saved.Contains(zone)))
+            {
+                onComplete(new ZoneBundleArchiveResult
+                {
+                    Success = false,
+                    Tag = tag,
+                    Message = "Automatic archive reset candidates must be a nonempty subset of the saved zones."
+                });
+                yield break;
+            }
+
+            manifest.Version = ZoneBundleManifest.AutoArchiveVersion;
+            manifest.WorldUid = ZNet.instance.GetWorldUID();
+            manifest.ResetAfterSave = resetAfterSave;
+            manifest.ResetEligibleZones = eligible.Select(ToModel).ToList();
+            manifest.ResetCompletedZones = [];
+        }
+
         string saveGeneration = Guid.NewGuid().ToString("N").Substring(0, 12);
 
         ZoneBundleTerrain.TerrainSourceAnchor sourceAnchor = new(float.NaN);
@@ -448,7 +472,7 @@ internal static partial class ZoneBundleCommands
             int monsterCount;
             ZoneBundleTerrainCaptureState terrainState;
             CaptureBundleResult? capture = null;
-            yield return CaptureBundleAsync(zone, tag, sourceAnchor, result => capture = result);
+            yield return CaptureBundleAsync(zone, tag, sourceAnchor, result => capture = result, canCaptureObject);
             if (capture == null || !capture.Success || capture.Bundle == null)
             {
                 onComplete(CreateArchiveResult(
@@ -592,11 +616,13 @@ internal static partial class ZoneBundleCommands
 
     private static List<Vector2i> NormalizeZones(IEnumerable<Vector2i> zones)
     {
-        return zones
+        List<Vector2i> normalized = zones
             .Distinct()
             .OrderBy(zone => zone.y)
             .ThenBy(zone => zone.x)
             .ToList();
+        foreach (Vector2i zone in normalized) ZoneSaviorZones.ToGameZone(zone);
+        return normalized;
     }
 
     private static ZoneBundleManifest CreateManifest(string tag, List<Vector2i> zones, out string manifestPath)
@@ -784,10 +810,13 @@ internal static partial class ZoneBundleCommands
         Vector2i targetZone;
         ZoneBundleFile bundle;
         List<LoadWorkItem> work;
+        ZoneBundleManifest manifest;
         try
         {
             sourceZone = ToSingleSourceZone(request.SourceRange);
             targetZone = ToVector2i(request.TargetZone!);
+            manifest = ZoneBundleStore.LoadManifest(request.Tag);
+            ZoneBundleStore.ValidateLoadTargets(manifest, [targetZone], ZNet.instance.GetWorldName(), ZNet.instance.GetWorldUID());
         }
         catch (Exception ex)
         {
@@ -814,7 +843,7 @@ internal static partial class ZoneBundleCommands
             totals = loadTotals;
             terrainPreparation = preparation;
             loadError = error;
-        });
+        }, restrictClearToTargets: manifest.Version == ZoneBundleManifest.AutoArchiveVersion);
         if (!string.IsNullOrWhiteSpace(loadError))
         {
             onComplete(ZoneBundleCommandResult.Fail(loadError));
@@ -848,6 +877,9 @@ internal static partial class ZoneBundleCommands
             int sourceMinZ = sourceZones.Min(zone => zone.y);
             offsetX = checked(targetStart.x - sourceMinX);
             offsetZ = checked(targetStart.y - sourceMinZ);
+            ZoneBundleStore.ValidateLoadTargets(manifest,
+                sourceZones.Select(zone => new Vector2i(checked(zone.x + offsetX), checked(zone.y + offsetZ))),
+                ZNet.instance.GetWorldName(), ZNet.instance.GetWorldUID());
         }
         catch (Exception ex)
         {
@@ -896,7 +928,7 @@ internal static partial class ZoneBundleCommands
             totals = loadTotals;
             terrainPreparation = preparation;
             loadError = error;
-        });
+        }, restrictClearToTargets: manifest.Version == ZoneBundleManifest.AutoArchiveVersion);
         if (!string.IsNullOrWhiteSpace(loadError))
         {
             onComplete(ZoneBundleCommandResult.Fail(loadError));
@@ -912,9 +944,11 @@ internal static partial class ZoneBundleCommands
     {
         string tag = request.Tag;
         ZoneBundleManifest manifest;
+        List<ZoneBundleManifestEntry> restoreEntries;
         try
         {
             manifest = ZoneBundleStore.LoadManifest(tag);
+            restoreEntries = ZoneBundleStore.GetOriginalRestoreEntries(manifest);
         }
         catch (Exception ex)
         {
@@ -933,7 +967,7 @@ internal static partial class ZoneBundleCommands
         long totalEntries = 0L;
         long totalTerrainContacts = 0L;
         long totalDataCharacters = 0L;
-        foreach (ZoneBundleManifestEntry entry in manifest.Bundles)
+        foreach (ZoneBundleManifestEntry entry in restoreEntries)
         {
             Vector2i sourceZone = ToVector2i(entry.Zone);
             if (!ZoneBundleStore.TryLoadBundleFromManifestEntry(tag, entry, out ZoneBundleFile bundle, out string bundleReason))
@@ -967,7 +1001,7 @@ internal static partial class ZoneBundleCommands
             totals = loadTotals;
             terrainPreparation = preparation;
             restoreError = error;
-        });
+        }, restrictClearToTargets: manifest.Version == ZoneBundleManifest.AutoArchiveVersion);
         if (!string.IsNullOrWhiteSpace(restoreError))
         {
             onComplete(ZoneBundleCommandResult.Fail(restoreError));
@@ -1118,8 +1152,25 @@ internal static partial class ZoneBundleCommands
         bool exactSource,
         float yOffset,
         long terrainAssistPeer,
-        Action<ZoneLoadTotals, TerrainPreparationResult, string> onComplete)
+        Action<ZoneLoadTotals, TerrainPreparationResult, string> onComplete,
+        bool restrictClearToTargets = false)
     {
+        // Validate every target before any client terrain preparation or overwrite.
+        foreach (LoadWorkItem item in work) ZoneSaviorZones.ToGameZone(item.TargetZone);
+        HashSet<Vector2i>? allowedTargetZones = restrictClearToTargets
+            ? work.Select(item => item.TargetZone).ToHashSet()
+            : null;
+        if (allowedTargetZones != null)
+        {
+            Exception? boundaryError = null;
+            yield return ZoneSaviorCoroutines.RunSafely(ValidateClearTargetsAsync(allowedTargetZones),
+                ex => boundaryError = ex);
+            if (boundaryError != null)
+            {
+                onComplete(default, default, boundaryError.Message);
+                yield break;
+            }
+        }
         TerrainPlacementContext? terrainContext = null;
         TerrainPreparationResult terrainPreparation = default;
         string prepareError = "";
@@ -1136,7 +1187,7 @@ internal static partial class ZoneBundleCommands
         }
 
         ZoneLoadTotals totals = default;
-        yield return ApplyLoadWorkAsync(work, terrainContext, yOffset, terrainPreparation, value => totals = value);
+        yield return ApplyLoadWorkAsync(work, terrainContext, yOffset, terrainPreparation, value => totals = value, allowedTargetZones);
         onComplete(totals, terrainPreparation, "");
     }
 
@@ -1242,7 +1293,8 @@ internal static partial class ZoneBundleCommands
         TerrainPlacementContext? terrainContext,
         float yOffset,
         TerrainPreparationResult terrainPreparation,
-        Action<ZoneLoadTotals> onComplete)
+        Action<ZoneLoadTotals> onComplete,
+        HashSet<Vector2i>? allowedTargetZones = null)
     {
         List<LoadWorkItem> items = work.ToList();
         ZoneBundleSupportGrace.RegisterZones(items.Select(item => item.TargetZone));
@@ -1252,7 +1304,7 @@ internal static partial class ZoneBundleCommands
         {
             ZoneLoadStats stats = default;
             bool applyTerrain = !terrainPreparation.WasClientPrepared(item.TargetZone);
-            yield return ApplyBundleToZoneAsync(item.TargetZone, item.Bundle, terrainContext, yOffset, value => stats = value, applyTerrain);
+            yield return ApplyBundleToZoneAsync(item.TargetZone, item.Bundle, terrainContext, yOffset, value => stats = value, applyTerrain, allowedTargetZones);
             bool terrainApplied = stats.TerrainApplied ||
                                   (terrainPreparation.WasClientPrepared(item.TargetZone) && item.RequiresTerrain);
             totals.Add(stats, terrainApplied);
@@ -1696,7 +1748,7 @@ internal static partial class ZoneBundleCommands
         }
 
         Vector3 peerPosition = peer.m_refPos;
-        Vector3 zoneCenter = ZoneSystem.GetZonePos(zone);
+        Vector3 zoneCenter = ZoneSaviorZones.GetZonePos(zone);
         float dx = peerPosition.x - zoneCenter.x;
         float dz = peerPosition.z - zoneCenter.z;
         float distanceSqr = dx * dx + dz * dz;
@@ -1737,16 +1789,17 @@ internal static partial class ZoneBundleCommands
         return HasSavedTerrainContacts(bundle) || HasWearNTearEntries(bundle);
     }
 
-    private static IEnumerator CaptureBundleAsync(Vector2i zone, string tag, ZoneBundleTerrain.TerrainSourceAnchor sourceAnchor, Action<CaptureBundleResult> onComplete)
+    private static IEnumerator CaptureBundleAsync(Vector2i zone, string tag, ZoneBundleTerrain.TerrainSourceAnchor sourceAnchor,
+        Action<CaptureBundleResult> onComplete, Func<Vector2i, ZDO, bool>? canCaptureObject = null)
     {
-        Vector3 zoneCenter = ZoneSystem.GetZonePos(zone);
+        Vector3 zoneCenter = ZoneSaviorZones.GetZonePos(zone);
         bool useRelativePlacement = !float.IsNaN(sourceAnchor.BaseWorldY);
         List<ZoneBundleEntry> zoneEntries = [];
         Dictionary<long, string> creatorNames = [];
         List<ZDO> objects = [];
         try
         {
-            ZDOMan.instance.FindObjects(zone, objects);
+            ZoneSaviorZones.FindObjects(zone, objects);
         }
         catch (Exception ex)
         {
@@ -1770,6 +1823,13 @@ internal static partial class ZoneBundleCommands
                         ref monsterCount,
                         out ZoneBundleEntry entry))
                 {
+                    // Validate without yielding after copying the actual saved data. A later
+                    // comparison alone could miss an object changing and then changing back.
+                    if (canCaptureObject != null && !canCaptureObject(zone, zdo))
+                    {
+                        throw new InvalidOperationException($"Object {zdo.m_uid} in zone ({zone.x},{zone.y}) changed while the auto-archive was being captured.");
+                    }
+
                     zoneEntries.Add(entry);
                 }
             }
@@ -1806,6 +1866,35 @@ internal static partial class ZoneBundleCommands
         {
             onComplete(CaptureBundleResult.Failed(ex.Message));
         }
+    }
+
+    internal static string GetAutoArchiveResetFingerprint(ZDO zdo)
+    {
+        if (zdo == null || !zdo.IsValid() || ZNetScene.instance == null ||
+            !TryClassify(zdo, out SaveEntryKind kind, out GameObject prefab))
+        {
+            throw new InvalidOperationException("Cannot verify an unavailable or unsupported auto-archive object before reset.");
+        }
+
+        bool wearNTear = prefab.GetComponent<WearNTear>() != null;
+        Vector2i zone = ZoneSaviorZones.GetZone(zdo.GetPosition());
+        if ((wearNTear && !ZoneSaviorBuildRecipeRules.HasBuildRecipe(prefab)) ||
+            (!ZoneBundleTerrain.IsSupportWearNTear(zdo, zone, prefab) && kind != SaveEntryKind.Monster))
+        {
+            throw new InvalidOperationException("Auto-archive object is excluded by the bundle save policy; reset would lose its data.");
+        }
+
+        // Copy the live maps before sanitizing. GetBase64 sorts the typed dictionary
+        // keys, so insertion order and volatile runtime state cannot change the result.
+        DataEntry data = new(zdo);
+        SanitizeForSave(kind, data, wearNTear);
+        ZPackage fingerprint = new();
+        fingerprint.Write(zdo.GetPrefab());
+        fingerprint.Write(zdo.GetPosition());
+        fingerprint.Write(zdo.GetRotation());
+        fingerprint.Write(ReadScale(zdo, prefab));
+        fingerprint.Write(data.GetBase64());
+        return fingerprint.GetBase64();
     }
 
     private static bool TryCreateBundleEntry(
@@ -1848,7 +1937,7 @@ internal static partial class ZoneBundleCommands
         DataEntry data = new(zdo);
         SanitizeForSave(kind, data, wearNTear);
 
-        Vector3 worldPosition = zdo.m_position;
+        Vector3 worldPosition = zdo.GetPosition();
         Quaternion rotation = zdo.GetRotation();
         Vector3 scale = ReadScale(zdo, prefab);
 
@@ -1975,10 +2064,11 @@ internal static partial class ZoneBundleCommands
         TerrainPlacementContext? terrainContext,
         float yOffset,
         Action<ZoneLoadStats> onComplete,
-        bool applyTerrain = true)
+        bool applyTerrain = true,
+        HashSet<Vector2i>? allowedTargetZones = null)
     {
         int removed = 0;
-        yield return ClearTargetZoneAsync(targetZone, value => removed = value);
+        yield return ClearTargetZoneAsync(targetZone, value => removed = value, allowedTargetZones);
         yield return null;
 
         bool terrainApplied = false;
@@ -1995,7 +2085,7 @@ internal static partial class ZoneBundleCommands
 
         int created = 0;
         int processedSinceYield = 0;
-        Vector3 zoneCenter = ZoneSystem.GetZonePos(targetZone);
+        Vector3 zoneCenter = ZoneSaviorZones.GetZonePos(targetZone);
         ZoneLoadIssueSummary issues = new();
         foreach (ZoneBundleEntry entry in bundle.Entries)
         {
@@ -2049,7 +2139,7 @@ internal static partial class ZoneBundleCommands
             return false;
         }
 
-        ZNetScene.instance.CreateObject(zdo);
+        ZoneSaviorGameAccess.CreateObject(ZNetScene.instance, zdo);
         return true;
     }
 

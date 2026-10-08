@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.3.0
+
+- Automatic archives now include connected mixed-owner zones that share an eligible inactive creator, keeping structures together across zone boundaries. For adjacent `[A+B] [B+C] [C]` zones with A/B inactive and C active, one archive saves the first two zones and resets only `[A+B]`. This is the default policy; no separate aggressive setting is needed.
+- Keep active/protected creators from expanding the archive into unrelated zones. Minimum cluster size counts only eligible owners' pieces; mixed-owner clusters below that minimum are skipped instead of reset without a backup.
+- Record planned, completed and pending resets separately in automatic manifest version 3, together with the source world UID. Original-location restore of a reset archive only restores successfully reset zones; save-only archives restore their eligible core. Preserved mixed zones are not overwritten, including through single-zone and relocation commands aimed at their source coordinates.
+- Recheck saved object contents before and during reset; object changes, container-content changes and unexplained movement/removal stop the affected reset. Normal inactivity scans also recheck eligibility and stop on reconnects; explicit Steam ID targeting retains its administrator override of owner inactivity/protection. Validate each captured object against the pre-save snapshot before allowing deletion.
+- Stop reset and automatic-archive target clearing when a Spawned-object destruction chain crosses the allowed zone boundary. Write reset intent immediately before the first mutation; incomplete resets block loading until their partial world state has been reviewed.
+- Add separate saved-only, planned reset, completed reset and skipped reset scopes to archive reports and mixed-zone eligibility diagnostics.
+- Keep manual manifest version 2 and existing bundle version 3 files readable. New automatic manifest version 3 files require ZoneSavior 1.3.0 or later. Full relocation includes the saved mixed-zone objects and contents while leaving the retained source zone in place.
+- Require BepInExPack Valheim 5.4.2351. Build against original Valheim 1.0.16 game assemblies with the pinned ServerSync compatibility build and the existing config/RPC contracts.
+- Add automated archive planning, manifest, restore-target and snapshot-change regression coverage to the Unity Mono compatibility suite. Original client and dedicated-server DLL checks are separate from live gameplay validation; boundary support collapse and multiplayer world mutation still require in-game testing.
+
+## 1.2.11
+
+- Target Valheim 1.0.7 using original game assemblies and cached access to required private members.
+- Update embedded ServerSync for the new RPC constant and login message ordering; require BepInExPack Valheim 5.4.2350.
+- Preserve typed ZDO snapshots through the new GetData API, include the separate portal store in scans and zone queries, and prevent out-of-range coordinates from wrapping onto another zone.
+- Adapt terrain save/rebuild calls and console command registration while preserving existing placement, config, bundle and RPC formats.
+
 ## 1.2.10
 
 - New zone bundle saves record one valid bottom-contact height per piece and the deepest negative offset from the original base terrain. Relocation selects the most common 0.25m contact-height band, aligns its first contact with destination base terrain, then applies the saved negative offset. All loaded zones share one placement height; manual offsets remain additive.

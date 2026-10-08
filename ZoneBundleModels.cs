@@ -6,14 +6,21 @@ namespace ZoneSavior;
 internal sealed class ZoneBundleManifest
 {
     public const int CurrentVersion = 2;
+    public const int AutoArchiveVersion = 3;
 
     public int? Version { get; set; }
     public string Tag { get; set; } = "";
     public string World { get; set; } = "";
+    public long? WorldUid { get; set; }
     public string SavedAt { get; set; } = "";
     public ZoneBundleRange SourceRange { get; set; } = new();
     public List<ZoneBundleCreatorPlayer> SourceZoneCreators { get; set; } = new();
     public List<ZoneBundleManifestEntry> Bundles { get; set; } = new();
+    // Automatic archives can include neighboring zones that must remain untouched.
+    public bool? ResetAfterSave { get; set; }
+    public List<ZoneBundleZone>? ResetEligibleZones { get; set; }
+    public List<ZoneBundleZone>? ResetCompletedZones { get; set; }
+    public ZoneBundleZone? ResetPendingZone { get; set; }
 }
 
 internal sealed class ZoneBundleManifestEntry

@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using UnityEngine;
 
 namespace ZoneSavior;
 
@@ -165,6 +167,45 @@ internal static class ZoneSaviorFiles
 
 internal static class ZoneSaviorZones
 {
+    // Keep the mod's integer coordinates and serialized models unchanged.
+    internal static Vector2s ToGameZone(Vector2i zone)
+    {
+        if (zone.x < short.MinValue || zone.x > short.MaxValue ||
+            zone.y < short.MinValue || zone.y > short.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(nameof(zone), "Zone coordinates exceed Valheim's supported range.");
+        }
+        return new Vector2s(zone.x, zone.y);
+    }
+
+    internal static Vector2i GetZone(Vector3 position)
+    {
+        Vector2s zone = ZoneSystem.GetZone(position);
+        return new Vector2i(zone.x, zone.y);
+    }
+
+    internal static Vector3 GetZonePos(Vector2i zone) => ZoneSystem.GetZonePos(ToGameZone(zone));
+
+    internal static void FindObjects(Vector2i zone, List<ZDO> objects)
+    {
+        ZoneSystem.SectorIndex index = ZoneSystem.SectorToIndex(ToGameZone(zone));
+        AddZoneObjects(ZoneSaviorGameAccess.Sectors(ZDOMan.instance)[index.Sector], zone, objects);
+        if (ZDOMan.instance.GetPortals().TryGetValue(index, out List<ZDO> portals))
+        {
+            AddZoneObjects(portals, zone, objects);
+        }
+    }
+
+    private static void AddZoneObjects(List<ZDO>? source, Vector2i zone, List<ZDO> destination)
+    {
+        if (source == null) return;
+        foreach (ZDO zdo in source)
+        {
+            // Sector zero also contains out-of-world objects; never act on a different zone.
+            if (zdo != null && GetZone(zdo.GetPosition()) == zone) destination.Add(zdo);
+        }
+    }
+
     public static ZoneBundleZone ToModel(Vector2i zone)
     {
         return new ZoneBundleZone

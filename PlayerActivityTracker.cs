@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using BepInEx.Logging;
 using HarmonyLib;
 
@@ -46,7 +47,7 @@ internal static class PlayerActivityTracker
             return;
         }
 
-        ZNetPeer peer = ZNet.instance.GetPeer(rpc);
+        ZNetPeer peer = ZNet.instance.GetPeers().FirstOrDefault(candidate => candidate.m_rpc == rpc);
         TrackPeer(peer, DateTime.UtcNow, requireReady: false);
     }
 

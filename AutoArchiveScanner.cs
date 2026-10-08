@@ -57,31 +57,32 @@ internal static class AutoArchiveScanner
 
         HashSet<long> targetPlayerIds = options.TargetPlayerIds.ToHashSet();
         bool isTargetOverride = targetPlayerIds.Count > 0;
-        Dictionary<Vector2i, AutoArchiveZoneInfo> candidates = BuildCandidateZones(
-            zoneInfos,
-            utcNow,
-            targetPlayerIds,
-            options.ResetAfterSave,
-            run);
-        run.CandidateZones = candidates.Count;
-
-        List<List<Vector2i>> clusters = BuildClusters(candidates);
+        HashSet<long> eligibleCreators = FindEligibleCreators(zoneInfos, utcNow, targetPlayerIds);
+        List<AutoArchivePlan> plans = BuildArchivePlans(zoneInfos, eligibleCreators,
+            allowMixedOnly: isTargetOverride && !options.ResetAfterSave);
+        run.CandidateZones = plans.Sum(plan => plan.Zones.Count);
         int processedZones = 0;
         int clusterIndex = 0;
 
-        foreach (List<Vector2i> cluster in clusters.OrderBy(cluster => cluster.Min(zone => zone.x)).ThenBy(cluster => cluster.Min(zone => zone.y)))
+        foreach (AutoArchivePlan plan in plans)
         {
+            List<Vector2i> cluster = plan.Zones;
             clusterIndex++;
-            ArchiveClusterRecord record = BuildClusterRecord(cluster, candidates);
+            ArchiveClusterRecord record = BuildClusterRecord(cluster, zoneInfos);
+            record.ResetZones = plan.ResetZones.Select(ZoneSaviorZones.ToModel).ToList();
+            record.BackupOnlyZones = cluster.Except(plan.ResetZones).Select(ZoneSaviorZones.ToModel).ToList();
+            record.EligiblePieceCount = cluster.Sum(zone => zoneInfos[zone].CreatorPieceCounts
+                .Where(pair => eligibleCreators.Contains(pair.Key)).Sum(pair => pair.Value));
             bool smallCluster = !isTargetOverride &&
-                                record.PieceCount < AutoArchiveConfig.MinimumPiecesPerCluster;
+                                record.EligiblePieceCount < AutoArchiveConfig.MinimumPiecesPerCluster;
 
             if (smallCluster)
             {
-                if (!options.ResetAfterSave)
+                if (!options.ResetAfterSave || record.BackupOnlyZones.Count > 0)
                 {
                     record.Status = "skipped";
-                    record.Reason = $"piece count {record.PieceCount} is below minimum {AutoArchiveConfig.MinimumPiecesPerCluster}; reset mode is not enabled";
+                    record.Reason = $"eligible piece count {record.EligiblePieceCount} is below minimum {AutoArchiveConfig.MinimumPiecesPerCluster}" +
+                        (record.BackupOnlyZones.Count > 0 ? "; mixed-owner archives are never reset without saving" : "");
                     run.Clusters.Add(record);
                     continue;
                 }
@@ -90,7 +91,7 @@ internal static class AutoArchiveScanner
             // The scan yields between clusters. Recheck immediately before reserving
             // work so a creator who came online during an earlier cluster is protected.
             if (!isTargetOverride &&
-                !AllCreatorsEligible(record.Creators, DateTime.UtcNow, out string creatorReason))
+                !AllCreatorsEligible(record.Creators.Where(eligibleCreators.Contains), DateTime.UtcNow, out string creatorReason))
             {
                 record.Status = "skipped";
                 record.Reason = creatorReason;
@@ -121,7 +122,8 @@ internal static class AutoArchiveScanner
                 }
 
                 ZoneBundleResetResult? resetOnlyResult = null;
-                yield return ZoneBundleCommands.ResetGeneratedZonesAsync(cluster, result => resetOnlyResult = result);
+                yield return ZoneBundleCommands.ResetGeneratedZonesAsync(cluster, result => resetOnlyResult = result,
+                    zone => CanResetZone(zone, eligibleCreators, targetPlayerIds, out _));
                 if (resetOnlyResult == null)
                 {
                     record.Status = "reset-without-save-failed";
@@ -134,25 +136,54 @@ internal static class AutoArchiveScanner
 
                 record.Status = resetOnlyResult.Success ? "reset-without-save" : "reset-without-save-failed";
                 record.Reason = resetOnlyResult.Message;
+                if (resetOnlyResult.Success)
+                    record.ResetCompletedZones = cluster.Select(ZoneSaviorZones.ToModel).ToList();
 
                 run.Clusters.Add(record);
                 yield return null;
                 continue;
             }
 
-            record.Tag = ZoneBundleCommands.MakeUniqueAutoArchiveTag(BuildTag(clusterIndex, cluster, candidates));
+            record.Tag = ZoneBundleCommands.MakeUniqueAutoArchiveTag(BuildTag(clusterIndex, cluster, zoneInfos, eligibleCreators));
             if (options.DryRun)
             {
                 record.Status = "dry-run";
-                record.Reason = isTargetOverride
-                    ? "target override candidate; dry run is enabled"
-                    : "candidate only; dry run is enabled";
+                record.Reason = $"Would save {cluster.Count} zone(s), keep {record.BackupOnlyZones.Count} mixed-owner zone(s), " +
+                    $"and reset {(options.ResetAfterSave ? plan.ResetZones.Count : 0)} zone(s); dry run is enabled.";
                 run.Clusters.Add(record);
                 continue;
             }
 
             ZoneBundleArchiveResult? saveResult = null;
-            yield return ZoneBundleCommands.SaveZonesAsync(cluster, record.Tag, result => saveResult = result);
+            Dictionary<Vector2i, Dictionary<ZDOID, string>> resetSnapshots = [];
+            Exception? snapshotError = null;
+            if (options.ResetAfterSave)
+            {
+                try { resetSnapshots = plan.ResetZones.ToDictionary(zone => zone, CaptureResetObjects); }
+                catch (Exception ex) { snapshotError = ex; }
+            }
+            if (snapshotError != null)
+            {
+                record.Status = "skipped";
+                record.Reason = $"Could not verify all player-owned reset objects: {snapshotError.Message}";
+                run.Clusters.Add(record);
+                continue;
+            }
+            Dictionary<Vector2i, HashSet<ZDOID>> capturedIds = plan.ResetZones
+                .ToDictionary(zone => zone, _ => new HashSet<ZDOID>());
+            bool VerifyCapturedObject(Vector2i zone, ZDO zdo)
+            {
+                if (!options.ResetAfterSave || !resetSnapshots.TryGetValue(zone, out Dictionary<ZDOID, string> snapshot) ||
+                    (zdo.GetLong(ZDOVars.s_creator, 0L) == 0L && !zdo.GetBool(ZDOVars.s_tamed, false))) return true;
+                if (!snapshot.TryGetValue(zdo.m_uid, out string expected) ||
+                    expected != ZoneBundleCommands.GetAutoArchiveResetFingerprint(zdo)) return false;
+                capturedIds[zone].Add(zdo.m_uid);
+                return true;
+            }
+            yield return ZoneBundleCommands.SaveZonesAsync(cluster, record.Tag, result => saveResult = result,
+                resetEligibleZones: plan.ResetZones.Count > 0 ? plan.ResetZones : null,
+                resetAfterSave: options.ResetAfterSave,
+                canCaptureObject: options.ResetAfterSave ? VerifyCapturedObject : null);
             if (saveResult == null)
             {
                 record.Status = "failed";
@@ -178,20 +209,7 @@ internal static class AutoArchiveScanner
 
             if (options.ResetAfterSave)
             {
-                ZoneBundleResetResult? resetResult = null;
-                yield return ZoneBundleCommands.ResetGeneratedZonesAsync(cluster, result => resetResult = result);
-                if (resetResult == null)
-                {
-                    record.Status = "saved-reset-failed";
-                    record.Reason = "reset failed: reset coroutine did not return a result";
-                    run.Clusters.Add(record);
-                    _logger.LogError($"Auto archive reset failed for tag '{record.Tag}': reset coroutine did not return a result.");
-                    yield return null;
-                    continue;
-                }
-
-                record.Status = resetResult.Success ? "reset" : "saved-reset-failed";
-                record.Reason = resetResult.Message;
+                yield return ResetSavedZones(plan, record, zoneInfos, eligibleCreators, targetPlayerIds, resetSnapshots, capturedIds);
             }
 
             run.Clusters.Add(record);
@@ -200,6 +218,178 @@ internal static class AutoArchiveScanner
 
         run.ProcessedZones = processedZones;
         onComplete(run);
+    }
+
+    private static IEnumerator ResetSavedZones(
+        AutoArchivePlan plan,
+        ArchiveClusterRecord record,
+        Dictionary<Vector2i, AutoArchiveZoneInfo> zoneInfos,
+        HashSet<long> eligibleCreators,
+        HashSet<long> targetPlayerIds,
+        Dictionary<Vector2i, Dictionary<ZDOID, string>> snapshots,
+        Dictionary<Vector2i, HashSet<ZDOID>> capturedIds)
+    {
+        List<string> messages = [];
+        foreach (Vector2i zone in plan.ResetZones)
+        {
+            string reason = "";
+            HashSet<ZDOID> destroyedIds = [];
+            bool mutationStarted = false;
+            bool CanReset()
+            {
+                try
+                {
+                    if (snapshots[zone].Keys.Any(id => !capturedIds[zone].Contains(id)))
+                    {
+                        reason = "Not all player-owned objects were captured in the archive";
+                        return false;
+                    }
+                    if (targetPlayerIds.Count == 0 &&
+                        !AllCreatorsEligible(zoneInfos[zone].Creators, DateTime.UtcNow, out reason)) return false;
+                    if (!CanResetZone(zone, eligibleCreators, targetPlayerIds, out reason)) return false;
+                    return ResetSnapshotMatches(snapshots[zone], CaptureResetObjects(zone), destroyedIds, out reason);
+                }
+                catch (Exception ex)
+                {
+                    reason = $"Could not verify reset objects: {ex.Message}";
+                    return false;
+                }
+            }
+
+            if (!CanReset())
+            {
+                record.ResetSkippedZones.Add(ZoneSaviorZones.ToModel(zone));
+                messages.Add($"Kept ({zone.x},{zone.y}): {reason}.");
+                continue;
+            }
+
+            void BeforeFirstMutation()
+            {
+                ZoneBundleStore.MarkResetStarted(record.Tag, zone);
+                mutationStarted = true;
+            }
+
+            ZoneBundleResetResult? resetResult = null;
+            Exception? resetError = null;
+            yield return ZoneSaviorCoroutines.RunSafely(
+                ZoneBundleCommands.ResetGeneratedZonesAsync(new[] { zone }, value => resetResult = value,
+                    _ => CanReset(), destroyedIds, BeforeFirstMutation),
+                ex => resetError = ex);
+            if (resetError != null || resetResult == null || !resetResult.Success)
+            {
+                if (!mutationStarted)
+                {
+                    record.ResetSkippedZones.Add(ZoneSaviorZones.ToModel(zone));
+                    messages.Add($"Kept ({zone.x},{zone.y}) before any mutation: " +
+                        (resetError?.Message ?? resetResult?.Message ?? "Reset returned no result.") + $" {reason}");
+                    continue;
+                }
+                record.Status = "saved-reset-failed";
+                record.Reason = $"Reset incomplete at ({zone.x},{zone.y}); pending marker retained. " +
+                    (resetError?.Message ?? resetResult?.Message ?? "Reset returned no result.") +
+                    (string.IsNullOrWhiteSpace(reason) ? "" : $" {reason}");
+                _logger.LogWarning(record.Reason);
+                yield break;
+            }
+
+            Exception? journalError = null;
+            try { ZoneBundleStore.MarkResetCompleted(record.Tag, zone); }
+            catch (Exception ex) { journalError = ex; }
+            if (journalError != null)
+            {
+                record.Status = "saved-reset-failed";
+                record.Reason = $"Reset finished at ({zone.x},{zone.y}), but completion could not be recorded; pending marker retained: {journalError.Message}";
+                yield break;
+            }
+
+            record.ResetCompletedZones.Add(ZoneSaviorZones.ToModel(zone));
+            messages.Add(resetResult.Message);
+        }
+
+        record.Status = record.ResetSkippedZones.Count == 0 ? "reset" :
+            record.ResetCompletedZones.Count > 0 ? "saved-partial-reset" : "saved-reset-skipped";
+        record.Reason = $"Saved {plan.Zones.Count} zone(s), reset {record.ResetCompletedZones.Count}, " +
+            $"kept {record.BackupOnlyZones.Count} backup-only zone(s). " + string.Join(" ", messages);
+    }
+
+    private static bool CanResetZone(Vector2i zone, HashSet<long> plannedCreators, HashSet<long> targetPlayerIds, out string reason)
+    {
+        if (!IsWorldReady())
+        {
+            reason = "World is no longer ready";
+            return false;
+        }
+
+        PlayerActivityTracker.TrackOnlinePlayers(DateTime.UtcNow);
+        List<ZDO> objects = [];
+        ZoneSaviorZones.FindObjects(zone, objects);
+        HashSet<long> creators = [];
+        foreach (ZDO zdo in objects)
+        {
+            if (!zdo.IsValid()) continue;
+            long creator = zdo.GetLong(ZDOVars.s_creator, 0L);
+            if (creator == 0L) continue;
+            // Reset deletes more than the scanner's registered build recipes. Protect every
+            // observed creator, including modded pieces not eligible as archive candidates.
+            if (!plannedCreators.Contains(creator) ||
+                (targetPlayerIds.Count > 0 && !targetPlayerIds.Contains(creator)))
+            {
+                reason = $"creator {creator} is outside the approved reset owners";
+                return false;
+            }
+            creators.Add(creator);
+        }
+
+        reason = "";
+        return targetPlayerIds.Count > 0 || AllCreatorsEligible(creators, DateTime.UtcNow, out reason);
+    }
+
+    private static Dictionary<ZDOID, string> CaptureResetObjects(Vector2i zone)
+    {
+        List<ZDO> objects = [];
+        ZoneSaviorZones.FindObjects(zone, objects);
+        Dictionary<ZDOID, string> snapshot = [];
+        foreach (ZDO zdo in objects)
+        {
+            if (zdo.IsValid() && (zdo.GetLong(ZDOVars.s_creator, 0L) != 0L || zdo.GetBool(ZDOVars.s_tamed, false)))
+                snapshot[zdo.m_uid] = ZoneBundleCommands.GetAutoArchiveResetFingerprint(zdo);
+        }
+        return snapshot;
+    }
+
+    private static bool ResetSnapshotMatches(
+        Dictionary<ZDOID, string> saved,
+        Dictionary<ZDOID, string> current,
+        ISet<ZDOID> destroyedIds,
+        out string reason)
+    {
+        if (saved.Keys.Any(id => !current.ContainsKey(id) && !destroyedIds.Contains(id)) ||
+            current.Any(pair => !saved.TryGetValue(pair.Key, out string previous) || previous != pair.Value))
+        {
+            reason = "player-owned objects or their saved contents changed during the archive operation";
+            return false;
+        }
+        reason = "";
+        return true;
+    }
+
+    internal static HashSet<long> GetOnlineCreatorIds()
+    {
+        HashSet<long> ids = [];
+        if (Player.m_localPlayer != null) ids.Add(Player.m_localPlayer.GetPlayerID());
+        if (ZNet.instance != null && ZDOMan.instance != null)
+        {
+            foreach (ZNetPeer peer in ZNet.instance.GetPeers())
+            {
+                if (peer == null || peer.m_characterID.IsNone()) continue;
+                long id = ZDOMan.instance.GetZDO(peer.m_characterID)?.GetLong(ZDOVars.s_playerID, 0L) ?? 0L;
+                if (id != 0L) ids.Add(id);
+            }
+        }
+        foreach (long id in ids.ToArray())
+            if (AutoArchiveStore.TryGetPlayerRecord(id, out PlayerActivityRecord record))
+                ids.UnionWith(record.PlayerIds.Where(creator => creator != 0L));
+        return ids;
     }
 
     private static bool TryReadPlayerStructure(ZDO zdo, DateTime utcNow, out Vector2i zone, out long creator)
@@ -228,7 +418,7 @@ internal static class AutoArchiveScanner
     {
         int batchSize = Math.Max(1, AutoArchiveConfig.ScannerBatchSize);
         int processedSinceYield = 0;
-        List<ZDO>[] sectors = ZDOMan.instance.m_objectsBySector;
+        List<ZDO>[] sectors = ZoneSaviorGameAccess.Sectors(ZDOMan.instance);
         for (int sectorIndex = 0; sectors != null && sectorIndex < sectors.Length; sectorIndex++)
         {
             List<ZDO> sector = sectors[sectorIndex];
@@ -249,8 +439,9 @@ internal static class AutoArchiveScanner
             }
         }
 
-        List<List<ZDO>> outsideSectors = ZDOMan.instance.m_objectsByOutsideSector?.Values.ToList() ?? [];
-        foreach (List<ZDO> sector in outsideSectors)
+        // In 1.0.7 outside-world objects are in sector zero; portals have their own store.
+        List<List<ZDO>> portalSectors = ZDOMan.instance.GetPortals().Values.ToList();
+        foreach (List<ZDO> sector in portalSectors)
         {
             if (sector == null || sector.Count == 0)
             {
@@ -292,71 +483,35 @@ internal static class AutoArchiveScanner
         info.AddCreator(creator);
     }
 
-    private static Dictionary<Vector2i, AutoArchiveZoneInfo> BuildCandidateZones(
+    private static HashSet<long> FindEligibleCreators(
         Dictionary<Vector2i, AutoArchiveZoneInfo> zoneInfos,
         DateTime utcNow,
-        HashSet<long> targetPlayerIds,
-        bool resetAfterSave,
-        ArchiveRunRecord run)
+        HashSet<long> targetPlayerIds)
     {
-        Dictionary<Vector2i, AutoArchiveZoneInfo> candidates = [];
-        bool isTargetOverride = targetPlayerIds.Count > 0;
-        foreach (AutoArchiveZoneInfo info in zoneInfos.Values)
-        {
-            if (isTargetOverride)
-            {
-                if (!info.Creators.Any(targetPlayerIds.Contains))
-                {
-                    continue;
-                }
-
-                if (resetAfterSave &&
-                    HasNonTargetCreators(info.Creators, targetPlayerIds, out List<long> nonTargetCreators))
-                {
-                    run.Messages.Add(
-                        $"Skipped zone ({info.Zone.x},{info.Zone.y}): target reset blocked for mixed-owner zone; non-target creator(s): {FormatCreatorList(nonTargetCreators)}");
-                    continue;
-                }
-
-                candidates[info.Zone] = info;
-                continue;
-            }
-
-            if (!AllCreatorsEligible(info.Creators, utcNow, out string reason))
-            {
-                run.Messages.Add($"Skipped zone ({info.Zone.x},{info.Zone.y}): {reason}");
-                continue;
-            }
-
-            candidates[info.Zone] = info;
-        }
-
-        return candidates;
+        HashSet<long> online = GetOnlineCreatorIds();
+        return zoneInfos.Values.SelectMany(info => info.Creators).Distinct()
+            .Where(creator => targetPlayerIds.Count > 0
+                ? targetPlayerIds.Contains(creator)
+                : !online.Contains(creator) && AutoArchiveStore.IsCreatorArchiveEligible(
+                    creator, utcNow, AutoArchiveConfig.InactiveDays, out _))
+            .ToHashSet();
     }
 
-    private static bool HasNonTargetCreators(IEnumerable<long> creators, HashSet<long> targetPlayerIds, out List<long> nonTargetCreators)
+    private static List<AutoArchivePlan> BuildArchivePlans(
+        Dictionary<Vector2i, AutoArchiveZoneInfo> zoneInfos,
+        HashSet<long> eligibleCreators,
+        bool allowMixedOnly)
     {
-        nonTargetCreators = creators
-            .Where(creator => creator != 0L && !targetPlayerIds.Contains(creator))
-            .Distinct()
-            .OrderBy(creator => creator)
-            .ToList();
-        return nonTargetCreators.Count > 0;
-    }
-
-    private static string FormatCreatorList(IEnumerable<long> creators)
-    {
-        return string.Join(", ", creators.Select(creator => creator.ToString(CultureInfo.InvariantCulture)));
-    }
-
-    private static List<List<Vector2i>> BuildClusters(Dictionary<Vector2i, AutoArchiveZoneInfo> candidates)
-    {
-        List<List<Vector2i>> clusters = [];
-        HashSet<Vector2i> remaining = candidates.Keys.ToHashSet();
+        List<AutoArchivePlan> plans = [];
+        HashSet<Vector2i> remaining = zoneInfos.Values
+            .Where(info => info.Creators.Any(eligibleCreators.Contains))
+            .Select(info => info.Zone).ToHashSet();
+        HashSet<Vector2i> resetZones = remaining
+            .Where(zone => zoneInfos[zone].Creators.All(eligibleCreators.Contains)).ToHashSet();
 
         while (remaining.Count > 0)
         {
-            Vector2i start = remaining.First();
+            Vector2i start = remaining.OrderBy(zone => zone.x).ThenBy(zone => zone.y).First();
             remaining.Remove(start);
 
             List<Vector2i> cluster = [];
@@ -371,7 +526,10 @@ internal static class AutoArchiveScanner
                 foreach (Vector2i offset in NeighborOffsets)
                 {
                     Vector2i neighbor = new(zone.x + offset.x, zone.y + offset.y);
-                    if (!remaining.Contains(neighbor))
+                    if (!remaining.Contains(neighbor) ||
+                        (!(resetZones.Contains(zone) && resetZones.Contains(neighbor)) &&
+                         !zoneInfos[zone].Creators.Any(creator => eligibleCreators.Contains(creator) &&
+                             zoneInfos[neighbor].Creators.Contains(creator))))
                     {
                         continue;
                     }
@@ -381,10 +539,18 @@ internal static class AutoArchiveScanner
                 }
             }
 
-            clusters.Add(cluster);
+            List<Vector2i> ordered = cluster.OrderBy(zone => zone.y).ThenBy(zone => zone.x).ToList();
+            List<Vector2i> core = ordered.Where(resetZones.Contains).ToList();
+            // A retained mixed zone must not create a fresh archive on every automatic scan
+            // after its inactive-only source zones have already been reset.
+            if (core.Count > 0 || allowMixedOnly)
+            {
+                plans.Add(new AutoArchivePlan(ordered, core));
+            }
         }
 
-        return clusters;
+        return plans.OrderBy(plan => plan.Zones.Min(zone => zone.x))
+            .ThenBy(plan => plan.Zones.Min(zone => zone.y)).ToList();
     }
 
     private static ArchiveClusterRecord BuildClusterRecord(List<Vector2i> cluster, Dictionary<Vector2i, AutoArchiveZoneInfo> candidates)
@@ -415,8 +581,14 @@ internal static class AutoArchiveScanner
 
     private static bool AllCreatorsEligible(IEnumerable<long> creators, DateTime utcNow, out string reason)
     {
+        HashSet<long> online = GetOnlineCreatorIds();
         foreach (long creator in creators)
         {
+            if (online.Contains(creator))
+            {
+                reason = $"player {creator} is online";
+                return false;
+            }
             if (!AutoArchiveStore.IsCreatorArchiveEligible(
                     creator,
                     utcNow,
@@ -431,9 +603,13 @@ internal static class AutoArchiveScanner
         return true;
     }
 
-    private static string BuildTag(int index, List<Vector2i> cluster, Dictionary<Vector2i, AutoArchiveZoneInfo> candidates)
+    private static string BuildTag(int index, List<Vector2i> cluster, Dictionary<Vector2i, AutoArchiveZoneInfo> candidates, HashSet<long> eligibleCreators)
     {
         Dictionary<long, int> creatorPieceCounts = BuildCreatorPieceCounts(cluster, candidates);
+        foreach (long creator in creatorPieceCounts.Keys.Where(creator => !eligibleCreators.Contains(creator)).ToList())
+        {
+            creatorPieceCounts.Remove(creator);
+        }
         string ownerSegment = BuildOwnerSegment(creatorPieceCounts);
         return $"auto_{ownerSegment}_c{index:D3}";
     }
@@ -576,6 +752,18 @@ internal static class AutoArchiveScanner
             CreatorPieceCounts.TryGetValue(creator, out int count);
             CreatorPieceCounts[creator] = count + 1;
         }
+    }
+
+    private sealed class AutoArchivePlan
+    {
+        public AutoArchivePlan(List<Vector2i> zones, List<Vector2i> resetZones)
+        {
+            Zones = zones;
+            ResetZones = resetZones;
+        }
+
+        public List<Vector2i> Zones { get; }
+        public List<Vector2i> ResetZones { get; }
     }
 }
 

@@ -30,7 +30,7 @@ internal static class ZoneStructureClassifier
             return false;
         }
 
-        objectZone = ZoneSystem.GetZone(zdo.GetPosition());
+        objectZone = ZoneSaviorZones.GetZone(zdo.GetPosition());
         creatorName = zdo.GetString(ZDOVars.s_creatorName, "");
         return true;
     }
@@ -45,7 +45,7 @@ internal static class ZoneStructureClassifier
         }
 
         Vector3 position = zdo.GetPosition();
-        Vector2i objectZone = ZoneSystem.GetZone(position);
+        Vector2i objectZone = ZoneSaviorZones.GetZone(position);
         GameObject? prefab = ZNetScene.instance?.GetPrefab(zdo.GetPrefab());
         bool hasPrefab = prefab != null && prefab;
         bool inRequestedZone = requestedZone == null || objectZone == requestedZone.Value;

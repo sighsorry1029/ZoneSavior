@@ -132,7 +132,7 @@ internal static partial class ZoneBundleTerrain
             yield break;
         }
 
-        Vector3 zoneCenter = ZoneSystem.GetZonePos(zone);
+        Vector3 zoneCenter = ZoneSaviorZones.GetZonePos(zone);
         float minimum = 0f;
         int processedSinceYield = 0;
         float lastX = float.NaN;
@@ -256,7 +256,7 @@ internal static partial class ZoneBundleTerrain
 
     private static List<TerrainSupportSample> CollectSavedContactSamples(Vector2i zone, IEnumerable<ZoneBundleTerrainContact> contacts)
     {
-        Vector3 zoneCenter = ZoneSystem.GetZonePos(zone);
+        Vector3 zoneCenter = ZoneSaviorZones.GetZonePos(zone);
         return contacts
             .Select(contact => new TerrainSupportSample(
                 zoneCenter.x + contact.LocalX,
@@ -268,7 +268,7 @@ internal static partial class ZoneBundleTerrain
     private static List<TerrainSupportSample> CollectSupportSamples(Vector2i zone, IEnumerable<ZoneBundleEntry> entries, float baseWorldY = 0f)
     {
         List<TerrainSupportSample> samples = [];
-        Vector3 zoneCenter = ZoneSystem.GetZonePos(zone);
+        Vector3 zoneCenter = ZoneSaviorZones.GetZonePos(zone);
         bool useWorldY = !float.IsNaN(baseWorldY);
 
         foreach (ZoneBundleEntry entry in entries)
@@ -282,7 +282,7 @@ internal static partial class ZoneBundleTerrain
     private static IEnumerator CollectSupportSamplesAsync(Vector2i zone, IEnumerable<ZoneBundleEntry> entries, float baseWorldY, Action<List<TerrainSupportSample>> onComplete)
     {
         List<TerrainSupportSample> samples = [];
-        Vector3 zoneCenter = ZoneSystem.GetZonePos(zone);
+        Vector3 zoneCenter = ZoneSaviorZones.GetZonePos(zone);
         bool useWorldY = !float.IsNaN(baseWorldY);
         int processedSinceYield = 0;
 
@@ -514,7 +514,7 @@ internal static partial class ZoneBundleTerrain
         ZoneBundleWearNTearSaveMode saveMode,
         GameObject prefab)
     {
-        if (ZoneSystem.GetZone(zdo.GetPosition()) != zone)
+        if (ZoneSaviorZones.GetZone(zdo.GetPosition()) != zone)
         {
             return false;
         }
@@ -530,7 +530,7 @@ internal static partial class ZoneBundleTerrain
     private static bool TryReadTamedMonster(ZDO zdo, Vector2i zone, out GameObject prefab)
     {
         prefab = null!;
-        if (zdo == null || !zdo.IsValid() || ZoneSystem.GetZone(zdo.GetPosition()) != zone || !zdo.GetBool(ZDOVars.s_tamed, false))
+        if (zdo == null || !zdo.IsValid() || ZoneSaviorZones.GetZone(zdo.GetPosition()) != zone || !zdo.GetBool(ZDOVars.s_tamed, false))
         {
             return false;
         }

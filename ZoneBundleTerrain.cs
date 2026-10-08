@@ -2,12 +2,23 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
+using HarmonyLib;
 using UnityEngine;
 
 namespace ZoneSavior;
 
 internal static partial class ZoneBundleTerrain
 {
+    private static readonly AccessTools.FieldRef<TerrainComp, bool[]> ModifiedHeight = AccessTools.FieldRefAccess<TerrainComp, bool[]>("m_modifiedHeight");
+    private static readonly AccessTools.FieldRef<TerrainComp, float[]> LevelDelta = AccessTools.FieldRefAccess<TerrainComp, float[]>("m_levelDelta");
+    private static readonly AccessTools.FieldRef<TerrainComp, float[]> SmoothDelta = AccessTools.FieldRefAccess<TerrainComp, float[]>("m_smoothDelta");
+    private static readonly AccessTools.FieldRef<TerrainComp, Heightmap> CompilerHeightmap = AccessTools.FieldRefAccess<TerrainComp, Heightmap>("m_hmap");
+    private static readonly AccessTools.FieldRef<TerrainComp, ZNetView> CompilerView = AccessTools.FieldRefAccess<TerrainComp, ZNetView>("m_nview");
+    private static readonly AccessTools.FieldRef<TerrainComp, int> Operations = AccessTools.FieldRefAccess<TerrainComp, int>("m_operations");
+    private static readonly AccessTools.FieldRef<TerrainComp, Vector3> LastOpPoint = AccessTools.FieldRefAccess<TerrainComp, Vector3>("m_lastOpPoint");
+    private static readonly AccessTools.FieldRef<TerrainComp, float> LastOpRadius = AccessTools.FieldRefAccess<TerrainComp, float>("m_lastOpRadius");
+    private static readonly Action<TerrainComp, bool> SaveCompiler = AccessTools.MethodDelegate<Action<TerrainComp, bool>>(
+        AccessTools.Method(typeof(TerrainComp), "Save", new[] { typeof(bool) }));
     private const float SearchRadius = 48f;
     private const float SupportFillSampleStep = 1f;
     private const float SupportFillClearance = 0.05f;
@@ -60,7 +71,7 @@ internal static partial class ZoneBundleTerrain
         }
 
         List<ZDO> objects = [];
-        ZDOMan.instance.FindObjects(zone, objects);
+        ZoneSaviorZones.FindObjects(zone, objects);
         foreach (ZDO zdo in objects)
         {
             if (TryReadSupportWearNTear(zdo, zone, ZoneBundleConfig.WearNTearSaveMode, out GameObject prefab) &&
@@ -449,7 +460,7 @@ internal static partial class ZoneBundleTerrain
 
         TerrainComp compiler = heightmap.GetAndCreateTerrainCompiler();
         PersistSupportFillTerrain(compiler, width, worldHeights);
-        heightmap.Poke(delayed: false);
+        heightmap.Poke(delayed: 0, paintOnly: false);
         ClutterSystem.instance?.ResetGrass(heightmap.transform.position, SearchRadius);
         onComplete(true);
     }
@@ -493,28 +504,33 @@ internal static partial class ZoneBundleTerrain
         }
 
         int count = width * width;
+        bool[] modifiedHeight = ModifiedHeight(compiler);
+        float[] levelDelta = LevelDelta(compiler);
+        float[] smoothDelta = SmoothDelta(compiler);
+        Heightmap heightmap = CompilerHeightmap(compiler);
+        ZNetView view = CompilerView(compiler);
         if (worldHeights.Length != count ||
-            compiler.m_modifiedHeight.Length != count ||
-            compiler.m_levelDelta.Length != count ||
-            compiler.m_smoothDelta.Length != count)
+            modifiedHeight.Length != count ||
+            levelDelta.Length != count ||
+            smoothDelta.Length != count)
         {
             throw new InvalidOperationException("Target terrain compiler size does not match the heightmap.");
         }
 
-        if (!compiler.m_nview.IsOwner())
+        if (!view.IsOwner())
         {
-            compiler.m_nview.ClaimOwnership();
+            view.ClaimOwnership();
         }
 
         for (int index = 0; index < count; index++)
         {
             int z = index / width;
             int x = index - z * width;
-            float nativeHeight = GetTerrainBaseOrCurrentHeight(compiler.m_hmap, x, z);
+            float nativeHeight = GetTerrainBaseOrCurrentHeight(heightmap, x, z);
             float delta = Mathf.Clamp(worldHeights[index] - nativeHeight, -NativeMaxTerrainDelta, NativeMaxTerrainDelta);
-            compiler.m_smoothDelta[index] = 0f;
-            compiler.m_levelDelta[index] = delta;
-            compiler.m_modifiedHeight[index] = Mathf.Abs(delta) > 0.01f;
+            smoothDelta[index] = 0f;
+            levelDelta[index] = delta;
+            modifiedHeight[index] = Mathf.Abs(delta) > 0.01f;
         }
 
         PersistCompiler(compiler);
@@ -530,16 +546,16 @@ internal static partial class ZoneBundleTerrain
 
     private static void PersistCompiler(TerrainComp compiler)
     {
-        if (compiler.m_nview != null && compiler.m_nview.IsValid() && !compiler.m_nview.IsOwner())
+        if (CompilerView(compiler) != null && CompilerView(compiler).IsValid() && !CompilerView(compiler).IsOwner())
         {
-            compiler.m_nview.ClaimOwnership();
+            CompilerView(compiler).ClaimOwnership();
         }
 
-        compiler.m_operations++;
-        compiler.m_lastOpPoint = Vector3.zero;
-        compiler.m_lastOpRadius = 0f;
-        compiler.Save();
-        compiler.m_hmap.Poke(delayed: false);
+        Operations(compiler)++;
+        LastOpPoint(compiler) = Vector3.zero;
+        LastOpRadius(compiler) = 0f;
+        SaveCompiler(compiler, false);
+        CompilerHeightmap(compiler).Poke(delayed: 0, paintOnly: false);
     }
 
     private static float GetWorldHeight(Heightmap heightmap, int x, int z)
@@ -585,18 +601,18 @@ internal static partial class ZoneBundleTerrain
             return false;
         }
 
-        heightmap = Heightmap.FindHeightmap(ZoneSystem.GetZonePos(zone));
+        heightmap = Heightmap.FindHeightmap(ZoneSaviorZones.GetZonePos(zone));
         return heightmap != null;
     }
 
     private static bool IsZoneLoaded(Vector2i zone)
     {
-        return ZoneSystem.instance != null && ZoneSystem.instance.IsZoneLoaded(zone);
+        return ZoneSystem.instance != null && ZoneSystem.instance.IsZoneLoaded(ZoneSaviorZones.ToGameZone(zone));
     }
 
     private static bool IsCompilerReady(TerrainComp compiler)
     {
-        if (compiler == null || compiler.m_hmap == null)
+        if (compiler == null || CompilerHeightmap(compiler) == null)
         {
             return false;
         }

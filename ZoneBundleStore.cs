@@ -54,6 +54,112 @@ internal static class ZoneBundleStore
         ZoneBundleSerialization.SaveManifest(manifestPath, manifest);
     }
 
+    public static void MarkResetStarted(string tag, Vector2i zone)
+    {
+        ZoneBundleManifest manifest = LoadManifest(tag);
+        if (manifest.Version != ZoneBundleManifest.AutoArchiveVersion || manifest.ResetAfterSave != true ||
+            manifest.ResetPendingZone != null ||
+            !manifest.ResetEligibleZones!.Any(candidate => IsZone(candidate, zone)) ||
+            manifest.ResetCompletedZones!.Any(candidate => IsZone(candidate, zone)))
+        {
+            throw new InvalidDataException($"Archive '{tag}' cannot start resetting zone ({zone.x},{zone.y}).");
+        }
+
+        manifest.ResetPendingZone = new ZoneBundleZone { X = zone.x, Z = zone.y };
+        SaveManifest(GetManifestPath(tag), manifest);
+    }
+
+    public static void MarkResetCompleted(string tag, Vector2i zone)
+    {
+        ZoneBundleManifest manifest = LoadManifest(tag);
+        if (manifest.Version != ZoneBundleManifest.AutoArchiveVersion || manifest.ResetAfterSave != true ||
+            manifest.ResetPendingZone == null || !IsZone(manifest.ResetPendingZone, zone))
+        {
+            throw new InvalidDataException($"Archive '{tag}' has no pending reset for zone ({zone.x},{zone.y}).");
+        }
+
+        manifest.ResetCompletedZones!.Add(manifest.ResetPendingZone);
+        manifest.ResetPendingZone = null;
+        SaveManifest(GetManifestPath(tag), manifest);
+    }
+
+    public static List<ZoneBundleManifestEntry> GetOriginalRestoreEntries(ZoneBundleManifest manifest)
+    {
+        if (manifest.Version == ZoneBundleManifest.CurrentVersion)
+        {
+            return manifest.Bundles;
+        }
+
+        RequireResolvedResetState(manifest);
+        List<ZoneBundleZone> permitted = manifest.ResetAfterSave == true
+            ? manifest.ResetCompletedZones!
+            : manifest.ResetEligibleZones!;
+        HashSet<Vector2i> zones = permitted.Select(ZoneSaviorZones.ToVector2i).ToHashSet();
+        List<ZoneBundleManifestEntry> entries = manifest.Bundles
+            .Where(entry => zones.Contains(ZoneSaviorZones.ToVector2i(entry.Zone)))
+            .ToList();
+        if (entries.Count == 0)
+        {
+            throw new InvalidDataException($"Automatic archive '{manifest.Tag}' contains no completed reset zones to restore. Preserved source zones will not be overwritten.");
+        }
+
+        return entries;
+    }
+
+    public static void ValidateLoadTargets(ZoneBundleManifest manifest, IEnumerable<Vector2i> targetZones,
+        string currentWorld, long? currentWorldUid = null)
+    {
+        if (manifest.Version == ZoneBundleManifest.CurrentVersion)
+        {
+            return;
+        }
+
+        RequireResolvedResetState(manifest);
+        // Names can change or be shared by different worlds. Without the live UID,
+        // keep source-coordinate protection rather than trusting a name mismatch.
+        if (currentWorldUid.HasValue && manifest.WorldUid != currentWorldUid)
+        {
+            return;
+        }
+
+        // Save-only archives retain the existing core restore behavior. Neighbor snapshots
+        // and reset candidates skipped after saving must never overwrite their live source.
+        List<ZoneBundleZone> permitted = manifest.ResetAfterSave == true
+            ? manifest.ResetCompletedZones!
+            : manifest.ResetEligibleZones!;
+        HashSet<Vector2i> replaceable = permitted.Select(ZoneSaviorZones.ToVector2i).ToHashSet();
+        HashSet<Vector2i> preserved = manifest.Bundles
+            .Select(entry => ZoneSaviorZones.ToVector2i(entry.Zone))
+            .Where(zone => !replaceable.Contains(zone))
+            .ToHashSet();
+        foreach (Vector2i target in targetZones)
+        {
+            if (preserved.Contains(target))
+            {
+                throw new InvalidDataException($"Target zone ({target.x},{target.y}) overlaps a preserved source zone in automatic archive '{manifest.Tag}'. Choose a destination outside the preserved source zones.");
+            }
+        }
+    }
+
+    private static void RequireResolvedResetState(ZoneBundleManifest manifest)
+    {
+        if (manifest.Version != ZoneBundleManifest.AutoArchiveVersion || manifest.WorldUid == null || manifest.ResetAfterSave == null ||
+            manifest.ResetEligibleZones == null || manifest.ResetCompletedZones == null)
+        {
+            throw new InvalidDataException("Automatic archive reset metadata is missing or unsupported.");
+        }
+
+        if (manifest.ResetPendingZone != null)
+        {
+            throw new InvalidDataException($"Automatic archive '{manifest.Tag}' has an incomplete reset at ({manifest.ResetPendingZone.X},{manifest.ResetPendingZone.Z}). Resolve its world state before loading this archive.");
+        }
+    }
+
+    private static bool IsZone(ZoneBundleZone candidate, Vector2i zone)
+    {
+        return candidate.X == zone.x && candidate.Z == zone.y;
+    }
+
     public static void SaveBundle(string path, ZoneBundleFile bundle)
     {
         ZoneBundleSerialization.SaveBundle(path, bundle);

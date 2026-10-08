@@ -223,7 +223,7 @@ internal static partial class ZoneBundleCommands
             throw new InvalidOperationException("No local player available. Use to (x,z) from a dedicated server console.");
         }
 
-        return ZoneSystem.GetZone(player.transform.position);
+        return ZoneSaviorZones.GetZone(player.transform.position);
     }
 
     private static ZoneBundleZone ToModel(Vector2i zone)

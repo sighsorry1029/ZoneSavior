@@ -52,7 +52,7 @@ internal static class ZoneBundleSerialization
 
     public static void SaveManifest(string path, ZoneBundleManifest manifest)
     {
-        if (manifest.Version != ZoneBundleManifest.CurrentVersion)
+        if (manifest.Version != ZoneBundleManifest.CurrentVersion && manifest.Version != ZoneBundleManifest.AutoArchiveVersion)
         {
             string version = manifest.Version?.ToString(CultureInfo.InvariantCulture) ?? "missing";
             throw new InvalidDataException($"Cannot save zone bundle manifest version {version}.");
@@ -78,7 +78,7 @@ internal static class ZoneBundleSerialization
         }
 
         ZoneBundleManifest manifest = Deserialize<ZoneBundleManifest>(File.ReadAllText(path, BundleEncoding));
-        if (manifest.Version != ZoneBundleManifest.CurrentVersion)
+        if (manifest.Version != ZoneBundleManifest.CurrentVersion && manifest.Version != ZoneBundleManifest.AutoArchiveVersion)
         {
             string version = manifest.Version?.ToString(CultureInfo.InvariantCulture) ?? "missing";
             throw new InvalidDataException(
@@ -243,6 +243,61 @@ internal static class ZoneBundleSerialization
                     $"Zone bundle manifest contains more than {MaxManifestCreatorCount} creator records.");
             }
         }
+
+        ValidateManifestResetState(manifest, zones);
+    }
+
+    private static void ValidateManifestResetState(ZoneBundleManifest manifest, HashSet<string> sourceZones)
+    {
+        if (manifest.Version == ZoneBundleManifest.CurrentVersion)
+        {
+            if (manifest.WorldUid != null || manifest.ResetAfterSave != null || manifest.ResetEligibleZones != null || manifest.ResetCompletedZones != null || manifest.ResetPendingZone != null)
+            {
+                throw new InvalidDataException("Automatic archive reset metadata requires manifest version 3.");
+            }
+
+            return;
+        }
+
+        if (manifest.WorldUid == null || manifest.ResetAfterSave == null || manifest.ResetEligibleZones == null || manifest.ResetCompletedZones == null ||
+            manifest.ResetEligibleZones.Count == 0 || string.IsNullOrWhiteSpace(manifest.World))
+        {
+            throw new InvalidDataException("Automatic archive reset metadata or source world is missing.");
+        }
+
+        HashSet<string> eligible = ValidateResetZoneList(manifest.ResetEligibleZones, sourceZones, "eligible");
+        HashSet<string> completed = ValidateResetZoneList(manifest.ResetCompletedZones, eligible, "completed");
+        if (manifest.ResetAfterSave == false && (completed.Count > 0 || manifest.ResetPendingZone != null))
+        {
+            throw new InvalidDataException("Save-only automatic archive cannot contain completed or pending reset zones.");
+        }
+        if (manifest.ResetPendingZone != null)
+        {
+            string pending = $"{manifest.ResetPendingZone.X},{manifest.ResetPendingZone.Z}";
+            if (!eligible.Contains(pending) || completed.Contains(pending))
+            {
+                throw new InvalidDataException("Automatic archive pending reset zone is not eligible or is already completed.");
+            }
+        }
+    }
+
+    private static HashSet<string> ValidateResetZoneList(List<ZoneBundleZone> zones, HashSet<string> allowed, string role)
+    {
+        if (zones.Count > MaxManifestBundleCount)
+        {
+            throw new InvalidDataException($"Automatic archive contains too many {role} reset zones.");
+        }
+
+        HashSet<string> result = new(StringComparer.Ordinal);
+        foreach (ZoneBundleZone? zone in zones)
+        {
+            if (zone == null || !allowed.Contains($"{zone.X},{zone.Z}") || !result.Add($"{zone.X},{zone.Z}"))
+            {
+                throw new InvalidDataException($"Automatic archive contains a missing, duplicate or invalid {role} reset zone.");
+            }
+        }
+
+        return result;
     }
 
     private static void ValidateBundle(ZoneBundleFile bundle)

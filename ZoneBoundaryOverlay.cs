@@ -50,7 +50,7 @@ internal static class ZoneBoundaryOverlay
         EnsureHud();
         EnsureLine();
 
-        Vector2i zone = ZoneSystem.GetZone(player.transform.position);
+        Vector2i zone = ZoneSaviorZones.GetZone(player.transform.position);
         UpdateHud(zone);
 
         if (zone.x != _lastZone.x || zone.y != _lastZone.y || Time.time >= _nextRefreshTime)
@@ -293,7 +293,7 @@ internal static class ZoneBoundaryOverlay
 
         float zoneSize = ZoneSystem.instance != null ? ZoneSystem.instance.m_zoneSize : ZoneSystem.c_ZoneSize;
         float half = zoneSize * 0.5f;
-        Vector3 center = ZoneSystem.GetZonePos(zone);
+        Vector3 center = ZoneSaviorZones.GetZonePos(zone);
 
         DrawExtendedEdge(Lines[0], new Vector3(center.x - half, 0f, center.z - half), new Vector3(center.x + half, 0f, center.z - half));
         DrawExtendedEdge(Lines[1], new Vector3(center.x + half, 0f, center.z - half), new Vector3(center.x + half, 0f, center.z + half));

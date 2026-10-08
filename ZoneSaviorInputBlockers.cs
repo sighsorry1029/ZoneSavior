@@ -39,7 +39,7 @@ internal static class ZoneSaviorInputBlockers
     private static bool IsValheimTextInputVisible()
     {
         TextInput textInput = TextInput.instance;
-        return textInput && textInput.m_visibleFrame;
+        return textInput && ZoneSaviorGameAccess.TextInputVisible(textInput);
     }
 
     private static bool IsFocusedInputField()

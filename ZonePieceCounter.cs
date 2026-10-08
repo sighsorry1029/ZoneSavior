@@ -210,7 +210,7 @@ internal static class ZonePieceCounter
             return;
         }
 
-        foreach (ZNetView view in new List<ZNetView>(ZNetScene.instance.m_instances.Values))
+        foreach (ZNetView view in new List<ZNetView>(ZoneSaviorGameAccess.Instances(ZNetScene.instance).Values))
         {
             if (view != null)
             {
@@ -242,7 +242,7 @@ internal static class ZonePieceCounter
             return false;
         }
 
-        Vector2i zone = ZoneSystem.GetZone(gameObject.transform.position);
+        Vector2i zone = ZoneSaviorZones.GetZone(gameObject.transform.position);
         bool playerPlaced = IsPlayerPlaced(piece, nview);
         bool forceCount = ZoneExternalPieceMarkers.ShouldForceCount(zdo);
         bool counted = ShouldCount(zone, playerPlaced, forceCount);
@@ -352,7 +352,7 @@ internal static class ZonePieceCounter
     }
 }
 
-[HarmonyPatch(typeof(ZNetScene), nameof(ZNetScene.Awake))]
+[HarmonyPatch(typeof(ZNetScene), "Awake")]
 internal static class ZonePieceCounterScenePatch
 {
     private static void Postfix()
@@ -361,7 +361,7 @@ internal static class ZonePieceCounterScenePatch
     }
 }
 
-[HarmonyPatch(typeof(Piece), nameof(Piece.Awake))]
+[HarmonyPatch(typeof(Piece), "Awake")]
 internal static class ZonePieceCounterPieceAwakePatch
 {
     private static void Postfix(Piece __instance)
@@ -397,7 +397,7 @@ internal static class ZonePieceCounterPieceDestroyPatch
     }
 }
 
-[HarmonyPatch(typeof(WearNTear), nameof(WearNTear.Awake))]
+[HarmonyPatch(typeof(WearNTear), "Awake")]
 internal static class ZonePieceCounterWearNTearAwakePatch
 {
     private static void Postfix(WearNTear __instance)

@@ -84,7 +84,7 @@ public static class StructureRegression
             Sequence(duplicate, "PlayerIds", 2L, 3L);
             Sequence(duplicate, "Names", "B", "C", "A");
         }
-        Console.WriteLine("PASS runtime merge: identity, platform, ordered unions, timestamps, source unchanged");
+        System.Console.WriteLine("PASS runtime merge: identity, platform, ordered unions, timestamps, source unchanged");
     }
     private static void Normalization(DateTime now)
     {
@@ -110,7 +110,7 @@ public static class StructureRegression
         object zeros = State(zeroA, zeroB);
         Call(store, "NormalizePlayerRecords", zeros);
         Check(((IList)Get(zeros, "Players")).Count == 2, "Shared zero ID alone must not merge");
-        Console.WriteLine("PASS reload normalization: Steam preference, stable ties, zero-ID exclusion");
+        System.Console.WriteLine("PASS reload normalization: Steam preference, stable ties, zero-ID exclusion");
     }
     private static void ChainAndIndexes(DateTime now)
     {
@@ -134,7 +134,7 @@ public static class StructureRegression
         foreach (long id in new long[] { 1, 2, 3, 4 })
             Check(Object.ReferenceEquals(byId[id], c), "ID index uses canonical record: " + id);
         Check(Object.ReferenceEquals(byPlatform[Get(c, "PlatformId")], c), "Platform index uses canonical record");
-        Console.WriteLine("PASS transitive overlap, normalization idempotence, replacement indexes");
+        System.Console.WriteLine("PASS transitive overlap, normalization idempotence, replacement indexes");
     }
     private static void Grace(Assembly assembly, DateTime now)
     {
@@ -161,7 +161,7 @@ public static class StructureRegression
         Call(grace, "RemoveExpired", now.AddTicks(1));
         Check(entries.Count == 1 && entries.Contains(past), "Repeated cleanup expires next boundary only");
         entries.Clear();
-        Console.WriteLine("PASS grace cleanup: empty, future, expiry boundary, repeated cleanup");
+        System.Console.WriteLine("PASS grace cleanup: empty, future, expiry boundary, repeated cleanup");
     }
     private static void ArchiveResults(Assembly assembly)
     {
@@ -194,7 +194,7 @@ public static class StructureRegression
                 Check((string)Get(result, "Message") == expected, "Archive result default/error/empty message");
             }
         }
-        Console.WriteLine("PASS archive results: counts, success/error, default/empty message, empty manifest");
+        System.Console.WriteLine("PASS archive results: counts, success/error, default/empty message, empty manifest");
     }
     public static void Run(string assemblyPath, string dependencyDirectory)
     {
@@ -228,7 +228,7 @@ public static class StructureRegression
             ChainAndIndexes(now);
             Grace(assembly, now);
             ArchiveResults(assembly);
-            Console.WriteLine("PASS " + assertions + " assertions: " + assemblyPath);
+            System.Console.WriteLine("PASS " + assertions + " assertions: " + assemblyPath);
         }
         finally { AppDomain.CurrentDomain.AssemblyResolve -= resolver; }
     }

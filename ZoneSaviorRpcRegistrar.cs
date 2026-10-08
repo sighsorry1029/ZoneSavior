@@ -4,6 +4,7 @@ namespace ZoneSavior;
 
 internal sealed class ZoneRpcRegistrar
 {
+    internal static long ServerPeerId => ZNet.instance?.GetServerPeer()?.m_uid ?? 0L;
     private ZRoutedRpc? _registeredRoutedRpc;
 
     public bool EnsureRegistered(Action<ZRoutedRpc> register)
@@ -29,6 +30,6 @@ internal sealed class ZoneRpcRegistrar
         return ZNet.instance != null &&
                !ZNet.instance.IsServer() &&
                ZRoutedRpc.instance != null &&
-               sender == ZRoutedRpc.instance.GetServerPeerID();
+               sender != 0L && sender == ServerPeerId;
     }
 }

@@ -666,7 +666,11 @@ internal static class AutoArchiveStore
             for (int clusterIndex = 0; clusterIndex < run.Clusters.Count; clusterIndex++)
             {
                 ArchiveClusterRecord? cluster = run.Clusters[clusterIndex];
-                if (cluster == null || cluster.Creators == null || cluster.Zones == null || cluster.Zones.Any(zone => zone == null))
+                if (cluster == null || cluster.Creators == null || cluster.Zones == null || cluster.Zones.Any(zone => zone == null) ||
+                    cluster.ResetZones == null || cluster.ResetZones.Any(zone => zone == null) ||
+                    cluster.BackupOnlyZones == null || cluster.BackupOnlyZones.Any(zone => zone == null) ||
+                    cluster.ResetCompletedZones == null || cluster.ResetCompletedZones.Any(zone => zone == null) ||
+                    cluster.ResetSkippedZones == null || cluster.ResetSkippedZones.Any(zone => zone == null))
                 {
                     throw new InvalidDataException($"Activity run {runIndex} cluster {clusterIndex} is invalid.");
                 }

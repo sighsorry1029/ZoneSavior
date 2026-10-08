@@ -28,7 +28,8 @@ internal static partial class ZoneBundleCommands
         throw new InvalidOperationException($"Could not find a free archive tag for '{preferredTag}'.");
     }
 
-    internal static IEnumerator ResetGeneratedZonesAsync(IEnumerable<Vector2i> sourceZones, Action<ZoneBundleResetResult> onComplete)
+    internal static IEnumerator ResetGeneratedZonesAsync(IEnumerable<Vector2i> sourceZones, Action<ZoneBundleResetResult> onComplete,
+        Func<Vector2i, bool>? canResetZone = null, ISet<ZDOID>? destroyedIds = null, Action? onBeforeFirstMutation = null)
     {
         List<Vector2i> zones = NormalizeZones(sourceZones);
 
@@ -45,11 +46,36 @@ internal static partial class ZoneBundleCommands
         HashSet<ZDOID> characterIds = GetOnlineCharacterIds();
         HashSet<Vector2i> zoneSet = zones.ToHashSet();
         int removed = 0;
-        yield return ResetZoneObjectsAsync(zoneSet, characterIds, value => removed = value);
+        string? failure = null;
+        bool mutationStarted = false;
+        void BeginMutation()
+        {
+            if (mutationStarted) return;
+            onBeforeFirstMutation?.Invoke();
+            mutationStarted = true;
+        }
+
+        yield return ResetZoneObjectsAsync(zoneSet, characterIds, canResetZone, destroyedIds, BeginMutation, (value, reason) =>
+        {
+            removed = value;
+            failure = reason;
+        });
+        if (failure != null)
+        {
+            onComplete(BuildInterruptedResetResult(zones.Count, removed, failure));
+            yield break;
+        }
 
         int zonesSinceYield = 0;
         foreach (Vector2i zone in zones)
         {
+            if (!CanContinueReset(zone, canResetZone, out failure))
+            {
+                onComplete(BuildInterruptedResetResult(zones.Count, removed, failure!));
+                yield break;
+            }
+
+            BeginMutation();
             ResetZoneSystemState(zone);
             zonesSinceYield++;
             if (zonesSinceYield >= TerrainRecalcBatchSize)
@@ -60,30 +86,97 @@ internal static partial class ZoneBundleCommands
         }
 
         ResetVerificationResult verification = default;
-        yield return VerifyResetObjectsAsync(zoneSet, characterIds, value => verification = value);
+        yield return VerifyResetObjectsAsync(zoneSet, characterIds, canResetZone, destroyedIds, BeginMutation, (value, reason) =>
+        {
+            verification = value;
+            failure = reason;
+        });
         removed += verification.Removed;
+        if (failure != null)
+        {
+            onComplete(BuildInterruptedResetResult(zones.Count, removed, failure));
+            yield break;
+        }
 
         ClutterSystem.instance?.ClearAll();
         yield return RecalculateLoadedTerrainAsync();
-        Minimap.instance?.UpdateLocationPins(1000f);
+        if (Minimap.instance != null) ZoneSaviorGameAccess.UpdateLocationPins(Minimap.instance, 1000f);
+
+        foreach (Vector2i zone in zones)
+        {
+            if (!CanContinueReset(zone, canResetZone, out failure))
+            {
+                onComplete(BuildInterruptedResetResult(zones.Count, removed, failure!));
+                yield break;
+            }
+        }
 
         onComplete(BuildResetResult(zones.Count, removed, verification.Removed, verification.RemainingWearNTear));
     }
 
-    private static IEnumerator VerifyResetObjectsAsync(HashSet<Vector2i> zoneSet, HashSet<ZDOID> characterIds, Action<ResetVerificationResult> onComplete)
+    private static IEnumerator VerifyResetObjectsAsync(HashSet<Vector2i> zoneSet, HashSet<ZDOID> characterIds,
+        Func<Vector2i, bool>? canResetZone, ISet<ZDOID>? destroyedIds, Action beforeMutation,
+        Action<ResetVerificationResult, string?> onComplete)
     {
         int remainingWearNTear = 0;
-        yield return CountRemainingCreatorWearNTearAsync(zoneSet, characterIds, value => remainingWearNTear = value);
+        string? failure = null;
+        yield return CountRemainingCreatorWearNTearAsync(zoneSet, characterIds, canResetZone, (value, reason) =>
+        {
+            remainingWearNTear = value;
+            failure = reason;
+        });
+        if (failure != null)
+        {
+            onComplete(new ResetVerificationResult(0, remainingWearNTear), failure);
+            yield break;
+        }
+
         if (remainingWearNTear <= 0)
         {
-            onComplete(new ResetVerificationResult(0, remainingWearNTear));
+            onComplete(new ResetVerificationResult(0, remainingWearNTear), null);
             yield break;
         }
 
         int verificationRemoved = 0;
-        yield return ResetZoneObjectsAsync(zoneSet, characterIds, value => verificationRemoved = value);
-        yield return CountRemainingCreatorWearNTearAsync(zoneSet, characterIds, value => remainingWearNTear = value);
-        onComplete(new ResetVerificationResult(verificationRemoved, remainingWearNTear));
+        yield return ResetZoneObjectsAsync(zoneSet, characterIds, canResetZone, destroyedIds, beforeMutation, (value, reason) =>
+        {
+            verificationRemoved = value;
+            failure = reason;
+        });
+        if (failure == null)
+        {
+            yield return CountRemainingCreatorWearNTearAsync(zoneSet, characterIds, canResetZone, (value, reason) =>
+            {
+                remainingWearNTear = value;
+                failure = reason;
+            });
+        }
+
+        onComplete(new ResetVerificationResult(verificationRemoved, remainingWearNTear), failure);
+    }
+
+    private static ZoneBundleResetResult BuildInterruptedResetResult(int zoneCount, int removed, string failure)
+    {
+        DataHelper.FlushDestroyed();
+        return new ZoneBundleResetResult
+        {
+            Success = false,
+            ZoneCount = zoneCount,
+            RemovedCount = removed,
+            Message = $"Reset interrupted after removing {removed} ZDO(s): {failure}"
+        };
+    }
+
+    private static bool CanContinueReset(Vector2i zone, Func<Vector2i, bool>? canResetZone, out string? failure)
+    {
+        failure = null;
+        if (canResetZone != null && !canResetZone(zone))
+        {
+            failure = $"Zone {zone} is no longer eligible for reset.";
+            return false;
+        }
+
+        return true;
     }
 
     private static ZoneBundleResetResult BuildResetResult(int zoneCount, int removed, int verificationRemoved, int remainingWearNTear)
@@ -111,16 +204,51 @@ internal static partial class ZoneBundleCommands
         };
     }
 
-    private static IEnumerator ClearTargetZoneAsync(Vector2i targetZone, Action<int> onComplete)
+    private static IEnumerator ValidateClearTargetsAsync(HashSet<Vector2i> allowedTargetZones)
     {
+        int processedSinceYield = 0;
         List<ZDO> objects = [];
-        ZDOMan.instance.FindObjects(targetZone, objects);
+        foreach (Vector2i zone in allowedTargetZones)
+        {
+            objects.Clear();
+            ZoneSaviorZones.FindObjects(zone, objects);
+            ZDOID[] objectIds = objects.Select(zdo => zdo.m_uid).ToArray();
+            foreach (ZDOID id in objectIds)
+            {
+                ZDO? zdo = ZDOMan.instance.GetZDO(id);
+                if (IsOverwritableZdo(zdo) &&
+                    !DataHelper.CanDestroyWithinZones(zdo!, allowedTargetZones, out string? failure))
+                {
+                    throw new InvalidOperationException($"Load target validation failed: {failure}");
+                }
+
+                processedSinceYield++;
+                if (processedSinceYield >= ResetBatchSize)
+                {
+                    processedSinceYield = 0;
+                    yield return null;
+                }
+            }
+        }
+    }
+
+    private static IEnumerator ClearTargetZoneAsync(Vector2i targetZone, Action<int> onComplete,
+        HashSet<Vector2i>? allowedTargetZones = null)
+    {
+        if (allowedTargetZones != null && !allowedTargetZones.Contains(targetZone))
+        {
+            throw new InvalidOperationException($"Load target zone {targetZone} is outside the allowed target zones.");
+        }
+
+        List<ZDO> objects = [];
+        ZoneSaviorZones.FindObjects(targetZone, objects);
 
         int removed = 0;
         int processedSinceYield = 0;
-        foreach (ZDO zdo in objects.ToList())
+        foreach (ZDOID id in objects.Select(zdo => zdo.m_uid).ToArray())
         {
-            removed += TryDestroyOverwritableZdo(zdo) ? 1 : 0;
+            ZDO? zdo = ZDOMan.instance.GetZDO(id);
+            removed += TryDestroyOverwritableZdo(zdo, allowedTargetZones) ? 1 : 0;
 
             processedSinceYield++;
             if (processedSinceYield >= ResetBatchSize)
@@ -135,7 +263,7 @@ internal static partial class ZoneBundleCommands
         onComplete(removed);
     }
 
-    private static bool TryDestroyOverwritableZdo(ZDO zdo)
+    private static bool IsOverwritableZdo(ZDO? zdo)
     {
         if (zdo == null || !zdo.IsValid())
         {
@@ -143,53 +271,81 @@ internal static partial class ZoneBundleCommands
         }
 
         GameObject prefab = ZNetScene.instance.GetPrefab(zdo.GetPrefab());
-        if (!prefab || !ShouldDeleteForOverwrite(prefab, zdo))
+        return prefab && ShouldDeleteForOverwrite(prefab, zdo);
+    }
+
+    private static bool TryDestroyOverwritableZdo(ZDO? zdo, HashSet<Vector2i>? allowedTargetZones = null)
+    {
+        if (!IsOverwritableZdo(zdo))
         {
             return false;
         }
 
-        DataHelper.Destroy(zdo);
+        if (allowedTargetZones == null)
+        {
+            DataHelper.Destroy(zdo!);
+        }
+        else if (!DataHelper.TryDestroyWithinZones(zdo!, allowedTargetZones, out _, out string? failure))
+        {
+            DataHelper.FlushDestroyed();
+            throw new InvalidOperationException($"Load target overwrite interrupted: {failure}");
+        }
+
         return true;
     }
 
     private static void ResetZoneSystemState(Vector2i zone)
     {
-        if (ZoneSystem.instance.m_locationInstances.TryGetValue(zone, out ZoneSystem.LocationInstance location))
+        Vector2s gameZone = ZoneSaviorZones.ToGameZone(zone);
+        if (ZoneSystem.instance.m_locationInstances.TryGetValue(gameZone, out ZoneSystem.LocationInstance location))
         {
             location.m_placed = false;
             location.m_position = new Vector3(
                 location.m_position.x,
                 WorldGenerator.instance.GetHeight(location.m_position.x, location.m_position.z),
                 location.m_position.z);
-            ZoneSystem.instance.m_locationInstances[zone] = location;
+            ZoneSystem.instance.m_locationInstances[gameZone] = location;
         }
 
-        ZoneSystem.instance.m_generatedZones.Remove(zone);
-        if (ZoneSystem.instance.m_zones.TryGetValue(zone, out ZoneSystem.ZoneData zoneData))
-        {
-            UnityEngine.Object.Destroy(zoneData.m_root);
-            ZoneSystem.instance.m_zones.Remove(zone);
-        }
+        ZoneSaviorGameAccess.UnloadZone(ZoneSystem.instance, gameZone);
     }
 
-    private static IEnumerator ResetZoneObjectsAsync(HashSet<Vector2i> zones, HashSet<ZDOID> protectedCharacterIds, Action<int> onComplete)
+    private static IEnumerator ResetZoneObjectsAsync(HashSet<Vector2i> zones, HashSet<ZDOID> protectedCharacterIds,
+        Func<Vector2i, bool>? canResetZone, ISet<ZDOID>? destroyedIds, Action beforeMutation, Action<int, string?> onComplete)
     {
         HashSet<ZDOID> seen = [];
         List<ZDO> zoneObjects = [];
+        List<ZDOID> resetObjects = [];
         int removed = 0;
         int processedSinceYield = 0;
+        string? failure;
+        // Check every known chain before the first deletion. Recheck each chain at deletion too,
+        // because a live connection or owner eligibility may change while this coroutine yields.
         foreach (Vector2i zone in zones)
         {
+            if (!CanContinueReset(zone, canResetZone, out failure))
+            {
+                onComplete(removed, failure);
+                yield break;
+            }
+
+            protectedCharacterIds.UnionWith(GetOnlineCharacterIds());
             zoneObjects.Clear();
-            ZDOMan.instance.FindObjects(zone, zoneObjects);
+            ZoneSaviorZones.FindObjects(zone, zoneObjects);
             foreach (ZDO zdo in zoneObjects)
             {
                 processedSinceYield++;
                 if (processedSinceYield >= ResetBatchSize)
                 {
-                    DataHelper.FlushDestroyed();
                     processedSinceYield = 0;
                     yield return null;
+                    if (!CanContinueReset(zone, canResetZone, out failure))
+                    {
+                        onComplete(removed, failure);
+                        yield break;
+                    }
+
+                    protectedCharacterIds.UnionWith(GetOnlineCharacterIds());
                 }
 
                 if (!TryCollectResetZoneObject(zdo, zones, seen, out ZDO resetObject))
@@ -199,17 +355,69 @@ internal static partial class ZoneBundleCommands
 
                 if (!protectedCharacterIds.Contains(resetObject.m_uid))
                 {
-                    DataHelper.Destroy(resetObject);
-                    removed++;
+                    if (!DataHelper.CanDestroyWithinZones(resetObject, zones, out failure))
+                    {
+                        onComplete(removed, failure);
+                        yield break;
+                    }
+
+                    resetObjects.Add(resetObject.m_uid);
                 }
             }
         }
 
+        foreach (Vector2i zone in zones)
+        {
+            if (!CanContinueReset(zone, canResetZone, out failure))
+            {
+                onComplete(removed, failure);
+                yield break;
+            }
+        }
+
+        processedSinceYield = 0;
+        foreach (ZDOID resetId in resetObjects)
+        {
+            if (processedSinceYield >= ResetBatchSize)
+            {
+                DataHelper.FlushDestroyed();
+                processedSinceYield = 0;
+                yield return null;
+                foreach (Vector2i zone in zones)
+                {
+                    if (!CanContinueReset(zone, canResetZone, out failure))
+                    {
+                        onComplete(removed, failure);
+                        yield break;
+                    }
+                }
+
+                protectedCharacterIds.UnionWith(GetOnlineCharacterIds());
+            }
+
+            processedSinceYield++;
+            // ZDO instances are pooled: retain IDs, then resolve again after any yield/deletion.
+            ZDO? resetObject = ZDOMan.instance.GetZDO(resetId);
+            if (resetObject == null || !resetObject.IsValid() || protectedCharacterIds.Contains(resetId))
+            {
+                continue;
+            }
+
+            if (!DataHelper.TryDestroyWithinZones(resetObject, zones, out int destroyed, out failure, destroyedIds, beforeMutation))
+            {
+                onComplete(removed, failure);
+                yield break;
+            }
+
+            removed += destroyed;
+        }
+
         DataHelper.FlushDestroyed();
-        onComplete(removed);
+        onComplete(removed, null);
     }
 
-    private static IEnumerator CountRemainingCreatorWearNTearAsync(HashSet<Vector2i> zones, HashSet<ZDOID> protectedCharacterIds, Action<int> onComplete)
+    private static IEnumerator CountRemainingCreatorWearNTearAsync(HashSet<Vector2i> zones, HashSet<ZDOID> protectedCharacterIds,
+        Func<Vector2i, bool>? canResetZone, Action<int, string?> onComplete)
     {
         HashSet<ZDOID> seen = [];
         List<ZDO> zoneObjects = [];
@@ -217,8 +425,15 @@ internal static partial class ZoneBundleCommands
         int processedSinceYield = 0;
         foreach (Vector2i zone in zones)
         {
+            if (!CanContinueReset(zone, canResetZone, out string? failure))
+            {
+                onComplete(count, failure);
+                yield break;
+            }
+
+            protectedCharacterIds.UnionWith(GetOnlineCharacterIds());
             zoneObjects.Clear();
-            ZDOMan.instance.FindObjects(zone, zoneObjects);
+            ZoneSaviorZones.FindObjects(zone, zoneObjects);
             foreach (ZDO zdo in zoneObjects)
             {
                 processedSinceYield++;
@@ -226,6 +441,13 @@ internal static partial class ZoneBundleCommands
                 {
                     processedSinceYield = 0;
                     yield return null;
+                    if (!CanContinueReset(zone, canResetZone, out failure))
+                    {
+                        onComplete(count, failure);
+                        yield break;
+                    }
+
+                    protectedCharacterIds.UnionWith(GetOnlineCharacterIds());
                 }
 
                 if (!TryCollectResetZoneObject(zdo, zones, seen, out ZDO resetObject) ||
@@ -239,7 +461,7 @@ internal static partial class ZoneBundleCommands
             }
         }
 
-        onComplete(count);
+        onComplete(count, null);
     }
 
     private static bool TryCollectResetZoneObject(ZDO zdo, HashSet<Vector2i> zones, HashSet<ZDOID> seen, out ZDO resetObject)
@@ -248,7 +470,7 @@ internal static partial class ZoneBundleCommands
         if (zdo == null ||
             !zdo.IsValid() ||
             !seen.Add(zdo.m_uid) ||
-            !zones.Contains(ZoneSystem.GetZone(zdo.GetPosition())))
+            !zones.Contains(ZoneSaviorZones.GetZone(zdo.GetPosition())))
         {
             return false;
         }
@@ -276,9 +498,9 @@ internal static partial class ZoneBundleCommands
             return ids;
         }
 
-        if (!ZNet.instance.m_characterID.IsNone())
+        if (!ZNet.instance.LocalPlayerCharacterID.IsNone())
         {
-            ids.Add(ZNet.instance.m_characterID);
+            ids.Add(ZNet.instance.LocalPlayerCharacterID);
         }
 
         foreach (ZNetPeer peer in ZNet.instance.GetPeers())
@@ -313,7 +535,7 @@ internal static partial class ZoneBundleCommands
 
     private static List<Heightmap> GetLoadedHeightmapSnapshot()
     {
-        return Heightmap.s_heightmaps
+        return Heightmap.GetAllHeightmaps()
             .Where(heightmap => heightmap)
             .ToList();
     }
@@ -327,8 +549,8 @@ internal static partial class ZoneBundleCommands
 
         try
         {
-            heightmap.m_buildData = null;
-            heightmap.Poke(true);
+            ZoneSaviorGameAccess.BuildData(heightmap) = null!;
+            heightmap.Poke(delayed: 1, paintOnly: false);
             return true;
         }
         catch (Exception ex)

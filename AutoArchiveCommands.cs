@@ -33,9 +33,9 @@ internal static class AutoArchiveCommands
         _initialized = true;
         _logger = logger;
 
-        _ = new Terminal.ConsoleCommand(ScanCommand, "[steamID] [dry|save|reset] - Runs an auto archive scan, optionally filtered to one Steam owner.", HandleCommand);
-        _ = new Terminal.ConsoleCommand(StatusCommand, "- Writes a YAML report with recent auto archive runs.", HandleCommand);
-        _ = new Terminal.ConsoleCommand(DebugZoneCommand, "(x,z) - Writes a YAML report explaining auto archive eligibility for one zone.", HandleCommand);
+        _ = new Terminal.ConsoleCommand(ScanCommand, "[steamID] [dry|save|reset] - Runs an auto archive scan, optionally filtered to one Steam owner.", HandleCommand, hideBehindDevCommands: false);
+        _ = new Terminal.ConsoleCommand(StatusCommand, "- Writes a YAML report with recent auto archive runs.", HandleCommand, hideBehindDevCommands: false);
+        _ = new Terminal.ConsoleCommand(DebugZoneCommand, "(x,z) - Writes a YAML report explaining auto archive eligibility for one zone.", HandleCommand, hideBehindDevCommands: false);
 
         RegisterRpcs();
     }
@@ -72,7 +72,7 @@ internal static class AutoArchiveCommands
         RegisterRpcs();
         ZPackage package = new();
         package.Write(ZoneBundleSerialization.Serialize(request));
-        ZRoutedRpc.instance.InvokeRoutedRPC(ZRoutedRpc.instance.GetServerPeerID(), RequestRpcName, package);
+        ZRoutedRpc.instance.InvokeRoutedRPC(RequestRpcName, package);
         context?.AddString($"{request.Command} request sent to server.");
     }
 
@@ -242,7 +242,7 @@ internal static class AutoArchiveCommands
         string path = WriteZoneDebugReport(report);
 
         messages.Add(
-            $"Archive debug zone ({zone.x},{zone.y}): zdo={report.Summary.TotalZdos}, candidatePieces={report.Summary.AutoArchiveCandidatePieces}, creators={report.Summary.CandidateCreators}, wouldCandidate={report.Summary.WouldBeCandidateZone}.");
+            $"Archive debug zone ({zone.x},{zone.y}): zdo={report.Summary.TotalZdos}, candidatePieces={report.Summary.AutoArchiveCandidatePieces}, creators={report.Summary.CandidateCreators}, resetCandidate={report.Summary.WouldBeCandidateZone}, mayBeBackupOnly={report.Summary.MayBeBackupOnlyZone}.");
         messages.Add($"Reason: {report.Summary.Reason}");
         messages.Add($"Wrote YAML: {path}");
     }
@@ -255,7 +255,7 @@ internal static class AutoArchiveCommands
         }
 
         List<ZDO> objects = [];
-        ZDOMan.instance.FindObjects(zone, objects);
+        ZoneSaviorZones.FindObjects(zone, objects);
         DateTime utcNow = DateTime.UtcNow;
         AutoArchiveZoneDebugReport report = new()
         {
@@ -301,6 +301,13 @@ internal static class AutoArchiveCommands
                 recordUnknownPlayer: false))
             .ToList();
 
+        HashSet<long> online = AutoArchiveScanner.GetOnlineCreatorIds();
+        foreach (AutoArchiveCreatorEligibility creator in report.Creators)
+        {
+            if (!online.Contains(creator.PlayerId)) continue;
+            creator.Eligible = false;
+            creator.Reason = $"player {creator.PlayerId} is online";
+        }
         bool allCreatorsEligible = report.Creators.Count > 0 && report.Creators.All(creator => creator.Eligible);
         report.Summary = new AutoArchiveZoneDebugSummary
         {
@@ -311,7 +318,8 @@ internal static class AutoArchiveCommands
             AutoArchiveCandidatePieces = report.Objects.Count(entry => entry.AutoArchiveCandidatePiece),
             CandidateCreators = creatorIds.Count,
             ObjectDbReady = ObjectDB.instance != null,
-            WouldBeCandidateZone = report.Objects.Any(entry => entry.AutoArchiveCandidatePiece) && allCreatorsEligible
+            WouldBeCandidateZone = report.Objects.Any(entry => entry.AutoArchiveCandidatePiece) && allCreatorsEligible,
+            MayBeBackupOnlyZone = !allCreatorsEligible && report.Creators.Any(creator => creator.Eligible)
         };
         report.Summary.Reason = BuildDebugSummaryReason(report, allCreatorsEligible);
 
@@ -352,6 +360,8 @@ internal static class AutoArchiveCommands
         if (!allCreatorsEligible)
         {
             string reasons = string.Join("; ", report.Creators.Where(creator => !creator.Eligible).Select(creator => creator.Reason));
+            if (report.Summary.MayBeBackupOnlyZone)
+                return $"This mixed-owner zone can be saved without reset when it connects to an eligible core through shared eligible creators. Protected creators: {reasons}";
             return $"At least one candidate creator is not archive-eligible: {reasons}";
         }
 

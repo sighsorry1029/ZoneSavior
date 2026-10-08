@@ -73,7 +73,7 @@ internal static class ZoneTerrainContactSampler
             return sources;
         }
 
-        Vector3 zoneCenter = ZoneSystem.GetZonePos(zone);
+        Vector3 zoneCenter = ZoneSaviorZones.GetZonePos(zone);
         foreach (ZoneBundleEntry entry in entries)
         {
             GameObject prefab = ZNetScene.instance.GetPrefab(entry.Prefab);
@@ -94,7 +94,7 @@ internal static class ZoneTerrainContactSampler
 
     public static List<ZoneBundleTerrainContact> ToZoneBundleContacts(Vector2i zone, float sourceBaseY, IEnumerable<TerrainWorldContact> contacts)
     {
-        Vector3 zoneCenter = ZoneSystem.GetZonePos(zone);
+        Vector3 zoneCenter = ZoneSaviorZones.GetZonePos(zone);
         return contacts
             .Select(contact => new ZoneBundleTerrainContact
             {

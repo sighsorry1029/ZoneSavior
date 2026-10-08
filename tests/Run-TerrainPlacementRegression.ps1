@@ -68,7 +68,7 @@ public static class TerrainPlacementRegression
         Near(5f, Solve(diagram, diagramVotes, -7f, delegate(float x, float z) { return 13f - 0.5f * x; }), "Reversed slope with saved cut depth");
         Near(15f, Solve(diagram, diagramVotes, -7f, delegate(float x, float z) { return 21f + 0.5f * x; }), "Similar slope translated upward");
         Near(12f, Solve(diagram, diagramVotes, 0f, delegate(float x, float z) { return 13f - 0.5f * x; }), "No saved cutting depth");
-        Console.WriteLine("PASS slope examples: reversed=5, translated=15, zero offset=12; inputs unchanged");
+        System.Console.WriteLine("PASS slope examples: reversed=5, translated=15, zero offset=12; inputs unchanged");
 
         IList mode = Samples(new[] { 0f, 0f, 0f }, new[] { 1f, 0f, 0f }, new[] { 2f, 0f, 0f }, new[] { 3f, 0f, 5f }, new[] { 4f, 0f, 5f }, new[] { 5f, 0f, 10f }, new[] { 6f, 0f, 10f });
         Near(20f, Solve(mode, new[] { 0f, 0f, 0f, 5f, 5f, 10f, 10f }, 0f, delegate(float x, float z) { return 20f; }), "Modal support layer wins over median layer");
@@ -90,7 +90,7 @@ public static class TerrainPlacementRegression
         for (int i = 0; i < 100; i++) unequalFootprints.Add(new[] { 100f + i, 0f, 0f });
         pieceVotes.Add(0f);
         Near(9f, Solve(Samples(unequalFootprints.ToArray()), pieceVotes.ToArray(), 0f, delegate(float x, float z) { return 10f; }), "Ten small pieces outweigh one large piece with 100 contact cells");
-        Console.WriteLine("PASS modal piece layer, maximum contact, stable ties, quantization, one vote per piece");
+        System.Console.WriteLine("PASS modal piece layer, maximum contact, stable ties, quantization, one vote per piece");
 
         IList partial = Samples(new[] { 0f, 0f, 1f }, new[] { 1f, 0f, 1f }, new[] { 2f, 0f, 1f }, new[] { 3f, 0f, 9f });
         float[] partialVotes = { 1f, 1f, 1f, 9f };
@@ -109,7 +109,7 @@ public static class TerrainPlacementRegression
         Solve(Samples(), new[] { 1f }, -7f, noQuery, false);
         Solve(partial, new float[0], 0f, noQuery, false);
         Solve(Samples(new[] { 0f, 0f, 5f }), new[] { 1f }, 0f, noQuery, false);
-        Console.WriteLine("PASS unavailable/invalid native heights, invalid offsets, missing samples/votes/selected plane return fallback");
+        System.Console.WriteLine("PASS unavailable/invalid native heights, invalid offsets, missing samples/votes/selected plane return fallback");
     }
     private static int callbackCount;
     public static void CaptureContext(object context) { callbackCount++; }
@@ -189,7 +189,7 @@ public static class TerrainPlacementRegression
             }
             finally { ((IDisposable)iterator).Dispose(); }
         }
-        Console.WriteLine("PASS coroutine aggregation: common minimum/votes, empty target neutrality, mixed/missing-native metadata fallback flag");
+        System.Console.WriteLine("PASS coroutine aggregation: common minimum/votes, empty target neutrality, mixed/missing-native metadata fallback flag");
     }
     private static object Contact(float relativeY)
     {
@@ -295,7 +295,7 @@ public static class TerrainPlacementRegression
         Check(Get(old, "MinimumTerrainOffset") == null && Get(old, "SupportPieceRelativeHeights") == null && (int)Get(old, "Version") == 3, "Existing v3 bundle without new metadata remains readable");
         object oldResponse = Deserialize(responseType, "requestId: old\nsuccess: true\ncontacts: []\n");
         Check(Get(oldResponse, "SupportPieceRelativeHeights") == null, "Capture RPC DTO without piece heights remains readable");
-        Console.WriteLine("PASS gzip -7/0/absent, legacy v3 absence, capture-response YAML roundtrips");
+        System.Console.WriteLine("PASS gzip -7/0/absent, legacy v3 absence, capture-response YAML roundtrips");
 
         foreach (float invalid in new[] { float.NaN, float.PositiveInfinity, float.NegativeInfinity, 0.01f })
         {
@@ -329,7 +329,7 @@ public static class TerrainPlacementRegression
         }
         object capturedEmpty = Bundle(null); Set(capturedEmpty, "SupportPieceRelativeHeights", new List<float>()); ((IList)Get(capturedEmpty, "TerrainContacts")).Clear();
         Call(serialization, "ValidateBundle", capturedEmpty); Check(true, "Captured empty supports remain valid without a minimum offset");
-        Console.WriteLine("PASS validators reject invalid numbers and unsupported contact state");
+        System.Console.WriteLine("PASS validators reject invalid numbers and unsupported contact state");
     }
     public static void Run(string assemblyPath, string dependencyDirectory)
     {
@@ -365,7 +365,7 @@ public static class TerrainPlacementRegression
             Aggregation(assembly);
             Directory.CreateDirectory(directory);
             Serialization(directory);
-            Console.WriteLine("PASS " + assertions + " terrain placement/serialization assertions: " + assemblyPath);
+            System.Console.WriteLine("PASS " + assertions + " terrain placement/serialization assertions: " + assemblyPath);
         }
         finally
         {

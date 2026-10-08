@@ -89,10 +89,15 @@ internal sealed class ArchiveClusterRecord
     public string Status { get; set; } = "";
     public string Reason { get; set; } = "";
     public int PieceCount { get; set; }
+    public int EligiblePieceCount { get; set; }
     public int TerrainLoaded { get; set; }
     public int TerrainCaptured { get; set; }
     public List<long> Creators { get; set; } = [];
     public List<ZoneBundleZone> Zones { get; set; } = [];
+    public List<ZoneBundleZone> ResetZones { get; set; } = [];
+    public List<ZoneBundleZone> BackupOnlyZones { get; set; } = [];
+    public List<ZoneBundleZone> ResetCompletedZones { get; set; } = [];
+    public List<ZoneBundleZone> ResetSkippedZones { get; set; } = [];
 }
 
 internal sealed class AutoArchiveScanOptions
@@ -147,6 +152,7 @@ internal sealed class AutoArchiveZoneDebugSummary
     public int CandidateCreators { get; set; }
     public bool ObjectDbReady { get; set; }
     public bool WouldBeCandidateZone { get; set; }
+    public bool MayBeBackupOnlyZone { get; set; }
     public string Reason { get; set; } = "";
 }
 

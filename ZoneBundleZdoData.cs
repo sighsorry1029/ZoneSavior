@@ -105,13 +105,17 @@ internal sealed class ZoneBundleZdoData
         Distant = zdo.Distant;
         ObjectType = zdo.Type;
 
-        Strings = ZDOExtraData.GetStrings(zdo.m_uid).ToDictionary(item => item.Key, item => item.Value);
-        Floats = ZDOExtraData.GetFloats(zdo.m_uid).ToDictionary(item => item.Key, item => item.Value);
-        Ints = ZDOExtraData.GetInts(zdo.m_uid).ToDictionary(item => item.Key, item => item.Value);
-        Longs = ZDOExtraData.GetLongs(zdo.m_uid).ToDictionary(item => item.Key, item => item.Value);
-        Vecs = ZDOExtraData.GetVec3s(zdo.m_uid).ToDictionary(item => item.Key, item => item.Value);
-        Quats = ZDOExtraData.GetQuaternions(zdo.m_uid).ToDictionary(item => item.Key, item => item.Value);
-        ByteArrays = ZDOExtraData.GetByteArrays(zdo.m_uid).ToDictionary(item => item.Key, item => item.Value.ToArray());
+        // GetData exposes the live typed maps. Copy every map and byte buffer before yielding.
+        // Connections remain intentionally excluded: restored objects receive new network IDs.
+        ZDOExtraData.GetData(zdo.m_uid, out var floats, out var vecs, out var quats,
+            out var ints, out var longs, out var strings, out var bytes, out _);
+        Strings = strings.ToDictionary(item => item.Key, item => item.Value);
+        Floats = floats.ToDictionary(item => item.Key, item => item.Value);
+        Ints = ints.ToDictionary(item => item.Key, item => item.Value);
+        Longs = longs.ToDictionary(item => item.Key, item => item.Value);
+        Vecs = vecs.ToDictionary(item => item.Key, item => item.Value);
+        Quats = quats.ToDictionary(item => item.Key, item => item.Value);
+        ByteArrays = bytes.ToDictionary(item => item.Key, item => item.Value.ToArray());
     }
 
     private void Load(string payload)
@@ -222,8 +226,9 @@ internal static class ZoneBundleZdoHelper
 
             chain.Add(current);
             ZDOID spawnedConnection = current.GetConnectionZDOID(ZDOExtraData.ConnectionType.Spawned);
+            ZDO connected = ZDOMan.instance.GetZDO(spawnedConnection);
             if (spawnedConnection == ZDOID.None ||
-                !ZDOMan.instance.m_objectsByID.TryGetValue(spawnedConnection, out ZDO connected) ||
+                connected == null ||
                 connected == current)
             {
                 break;
@@ -236,6 +241,86 @@ internal static class ZoneBundleZdoHelper
         {
             DestroySingle(chain[index]);
         }
+    }
+
+    public static bool CanDestroyWithinZones(ZDO zdo, HashSet<Vector2i> zones, out string? failure)
+    {
+        return TryCollectBoundedDestroyChain(zdo, zones, null, out failure);
+    }
+
+    public static bool TryDestroyWithinZones(ZDO zdo, HashSet<Vector2i> zones, out int removed, out string? failure,
+        ISet<ZDOID>? destroyedIds = null, Action? beforeDestroy = null)
+    {
+        removed = 0;
+        List<ZDO> chain = [];
+        if (!TryCollectBoundedDestroyChain(zdo, zones, chain, out failure))
+        {
+            return false;
+        }
+
+        if (chain.Count > 0)
+        {
+            beforeDestroy?.Invoke();
+        }
+
+        for (int index = chain.Count - 1; index >= 0; index--)
+        {
+            ZDOID id = chain[index].m_uid;
+            DestroySingle(chain[index]);
+            ZDO? remaining = ZDOMan.instance.GetZDO(id);
+            if (remaining == null || !remaining.IsValid())
+            {
+                destroyedIds?.Add(id);
+                removed++;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool TryCollectBoundedDestroyChain(ZDO zdo, HashSet<Vector2i> zones, List<ZDO>? chain, out string? failure)
+    {
+        failure = null;
+        if (ZDOMan.instance == null)
+        {
+            failure = "ZDO manager is unavailable.";
+            return false;
+        }
+
+        HashSet<ZDOID> visited = [];
+        ZDO? current = zdo;
+        while (current != null && current.IsValid() && visited.Add(current.m_uid))
+        {
+            // Re-resolve live connections rather than trusting a snapshot retained across a yield.
+            current = ZDOMan.instance.GetZDO(current.m_uid);
+            if (current == null || !current.IsValid())
+            {
+                break;
+            }
+
+            Vector2i zone = ZoneSaviorZones.GetZone(current.GetPosition());
+            if (!zones.Contains(zone))
+            {
+                failure = $"Spawned destruction chain reaches ZDO {current.m_uid} outside the allowed zones at {zone}.";
+                return false;
+            }
+
+            if (!CanDestroyZdo(current.m_uid))
+            {
+                break;
+            }
+
+            chain?.Add(current);
+            ZDOID spawnedConnection = current.GetConnectionZDOID(ZDOExtraData.ConnectionType.Spawned);
+            if (spawnedConnection == ZDOID.None)
+            {
+                break;
+            }
+
+            current = ZDOMan.instance.GetZDO(spawnedConnection);
+        }
+
+        return true;
     }
 
     private static void DestroySingle(ZDO zdo)
@@ -258,13 +343,13 @@ internal static class ZoneBundleZdoHelper
         {
             remaining.SetOwner(ZDOMan.GetSessionID());
             ZDOMan.instance.DestroyZDO(remaining);
-            ZDOMan.instance.HandleDestroyedZDO(id);
+            ZoneSaviorGameAccess.HandleDestroyedZdo(ZDOMan.instance, id);
         }
     }
 
     public static void FlushDestroyed()
     {
-        ZDOMan.instance?.SendDestroyed();
+        if (ZDOMan.instance != null) ZoneSaviorGameAccess.SendDestroyed(ZDOMan.instance);
     }
 
     private static bool CanDestroyZdo(ZDOID id)
@@ -274,7 +359,7 @@ internal static class ZoneBundleZdoHelper
             return false;
         }
 
-        return ZNet.instance == null || !ZNet.instance.m_peers.Any(peer => peer != null && peer.m_characterID == id);
+        return ZNet.instance == null || !ZNet.instance.GetPeers().Any(peer => peer != null && peer.m_characterID == id);
     }
 }
 

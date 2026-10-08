@@ -79,7 +79,7 @@ internal static class ZoneBundleSupportGrace
             return false;
         }
 
-        return TryGetRemaining(ZoneSystem.GetZone(wearNTear.transform.position), out _);
+        return TryGetRemaining(ZoneSaviorZones.GetZone(wearNTear.transform.position), out _);
     }
 
     public static bool TryGetRemaining(Vector2i zone, out TimeSpan remaining)
@@ -127,7 +127,7 @@ internal static class ZoneBundleSupportGrace
             return;
         }
 
-        long serverPeer = ZRoutedRpc.instance.GetServerPeerID();
+        long serverPeer = ZoneRpcRegistrar.ServerPeerId;
         if (serverPeer == 0L || _requestedSnapshotServer == serverPeer)
         {
             return;
@@ -233,7 +233,7 @@ internal static class ZoneBundleSupportGrace
     }
 }
 
-[HarmonyPatch(typeof(WearNTear), nameof(WearNTear.HaveSupport))]
+[HarmonyPatch(typeof(WearNTear), "HaveSupport")]
 internal static class ZoneBundleSupportGraceHaveSupportPatch
 {
     private static void Postfix(WearNTear __instance, ref bool __result)

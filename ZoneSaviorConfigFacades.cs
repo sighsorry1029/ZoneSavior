@@ -164,13 +164,13 @@ internal static class AutoArchiveConfig
             ConfigSections.AutoArchive,
             "Reset After Save",
             ZoneSaviorPlugin.Toggle.Off,
-            ConfigDescriptions.Ordered("If on, saved candidate zones are reset after their bundle is written.", 690));
+            ConfigDescriptions.Ordered("If on, saved zones whose creators are all archive-eligible are reset. Connected mixed-owner zones are included in the same archive and kept in the world.", 690));
         _minimumPiecesPerCluster = plugin.config(
             ConfigSections.AutoArchive,
             "Minimum Pieces Per Cluster",
             5,
             ConfigDescriptions.Ordered(
-                "Candidate clusters with fewer player structures are not saved. During reset runs, they are reset without saving; otherwise they are skipped.",
+                "Minimum structures belonging to eligible creators in a cluster. Smaller mixed-owner archives are skipped. Smaller clusters containing only eligible owners retain reset-without-save behavior during reset runs; otherwise they are skipped.",
                 new AcceptableValueRange<int>(1, 10000),
                 680));
         _inactiveDays = plugin.config(

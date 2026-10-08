@@ -17,11 +17,11 @@ internal static class ZoneBundleCommandEndpoint
         _ = new Terminal.ConsoleCommand(
             ZoneBundleCommands.SaveOperation,
             "(x,z) or (x~x,z~z) tag - Saves SupportFill zone bundles.",
-            HandleSaveZoneCommand);
+            HandleSaveZoneCommand, hideBehindDevCommands: false);
         _ = new Terminal.ConsoleCommand(
             ZoneBundleCommands.LoadOperation,
             "tag [restore|source (x,z)] [to (x,z)] [offset=Y] - Loads saved zone bundles.",
-            HandleLoadZoneCommand);
+            HandleLoadZoneCommand, hideBehindDevCommands: false);
     }
 
     public static void RegisterRpcs()
@@ -59,7 +59,7 @@ internal static class ZoneBundleCommandEndpoint
 
         ZPackage package = new();
         package.Write(ZoneBundleSerialization.Serialize(request));
-        ZRoutedRpc.instance.InvokeRoutedRPC(ZRoutedRpc.instance.GetServerPeerID(), RequestRpcName, package);
+        ZRoutedRpc.instance.InvokeRoutedRPC(RequestRpcName, package);
         context.AddString($"{request.Operation} request sent to server.");
     }
 
@@ -141,7 +141,7 @@ internal static partial class ZoneBundleCommands
     internal static bool IsAuthorizedSender(long sender)
     {
         ZNetPeer peer = ZNet.instance.GetPeer(sender);
-        string hostName = peer?.m_rpc?.m_socket?.GetHostName() ?? "";
+        string hostName = peer?.m_rpc?.GetSocket()?.GetHostName() ?? "";
         return hostName.Length > 0 && ZNet.instance.IsAdmin(hostName);
     }
 
