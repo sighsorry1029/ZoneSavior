@@ -30,7 +30,7 @@ $fixtures = foreach ($name in @('Structure','TerrainPlacement','AutoArchive')) {
     [IO.File]::WriteAllText($file, $match.Groups[1].Value)
     $file
 }
-& dotnet $compiler /nologo /noconfig /nostdlib+ /langversion:latest @references @gameReferences @libraryReferences /target:library "/out:$probe" "$PSScriptRoot/CompatibilityProbe.cs" @fixtures
+& dotnet $compiler /nologo /noconfig /nostdlib+ /langversion:latest @references @gameReferences @libraryReferences /target:library "/out:$probe" "$PSScriptRoot/CompatibilityProbe.cs" "$PSScriptRoot/BuildRulesRegression.cs" @fixtures
 if ($LASTEXITCODE) { throw 'Mono probe compilation failed.' }
 $isolatedMod = Join-Path $directory 'ZoneSavior.dll'
 Copy-Item -LiteralPath $ModDll -Destination $isolatedMod

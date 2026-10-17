@@ -6,7 +6,7 @@ Archive inactive-player structures and tamed animals per zone, save/load/restore
 
 ZoneSavior is a Valheim server maintenance mod for zone-based cleanup, archive, restore, and build-count control.
 
-ZoneSavior **1.3.0** builds against original Valheim **1.0.16** game assemblies and requires BepInExPack Valheim **5.4.2351**. It includes a pinned ServerSync compatibility build. Existing ZoneSavior config keys, RPC formats and bundle payload format remain unchanged. New automatic archives use manifest version 3 to distinguish saved zones from reset zones; these manifests require ZoneSavior 1.3.0 or later. Manual archives keep manifest version 2, and existing manifest version 2/bundle version 3 archives remain readable. Update the server and clients running ZoneSavior together to satisfy the existing synchronized-version requirement.
+ZoneSavior **1.3.1** builds against original Valheim **1.0.20** game assemblies and requires BepInExPack Valheim **5.4.2351**. It includes a pinned ServerSync compatibility build. Existing ZoneSavior config keys, RPC formats and bundle payload format remain unchanged. New automatic archives use manifest version 3 to distinguish saved zones from reset zones; these manifests require ZoneSavior 1.3.0 or later. Manual archives keep manifest version 2, and existing manifest version 2/bundle version 3 archives remain readable. Update the server and clients running ZoneSavior together to satisfy the existing synchronized-version requirement.
 
 It can:
 
@@ -14,6 +14,7 @@ It can:
 - restore saved bundles to the original place or a new zone
 - optionally reset archived source zones
 - enforce per-zone WearNTear limits from `zones.yml`
+- block selected building prefabs in matching zones before normal player placement
 - track player activity for inactive-owner cleanup
 - provide an optional client zone UI
 
@@ -39,6 +40,42 @@ BepInEx/config/
 `activity.yml` stores player activity, scan state, and recent scan records. ZoneSavior reloads it conservatively at runtime: broken YAML, dirty runtime state, and active scans are ignored.
 
 `zones.yml` stores zone limits and archive protection rules. Every rule must declare a non-negative `limit`. Steam IDs are the best long-term protection key; player names are convenient but can change.
+
+### Building rules
+
+Rules match zone coordinates inclusively, from top to bottom. The first match supplies both the count policy and the optional `blocked_pieces` list; lists from overlapping rules are not merged. A limit applies to each individual zone, not the entire matching rectangle.
+
+```yaml
+defaults:
+  count_creatorless: false
+rules:
+  - name: center_keep
+    x: [-1, 1]
+    z: [-1, 1]
+    limit: 50
+    count_creatorless: true
+    blocked_pieces:
+      - portal_wood
+      - piece_workbench
+  - name: outer_ring
+    x: [-2, 2]
+    z: [-2, 2]
+    limit: 100
+```
+
+`blocked_pieces` uses exact, case-sensitive prefab names, not translated display names or wildcards. Omitted, null or empty lists allow all prefab types; blank entries are rejected and an invalid reload retains the previous configuration. Repeated names are deduplicated. The example blocks only new normal player placement of wooden portals and workbenches in the center zones. Existing objects, network loading and administrative bundle restore are unaffected. Administrators using normal placement follow the same rule.
+
+Piece bans operate independently of `Zone WearNTear Limit`, which still controls only the existing WearNTear quantity restriction. They also cover building pieces without WearNTear; `count_creatorless` changes only what contributes to the quantity count. A count limit of 50 allows 50 counted objects; it rejects the next one.
+
+For dedicated servers, install this updated ZoneSavior build on both server and clients. The server supplies the YAML through the existing settings synchronization; the placing client rejects a banned prefab after refreshing the target position and before creating an object or spending materials, stamina or durability. This is not a server-only anti-bypass system. Other mods that directly instantiate objects or bypass `Player.TryPlacePiece` require separate integration. The existing count limit still uses loaded local structures and post-placement removal; it does not reserve capacity on the server for simultaneous builders.
+
+### Localization
+
+Building-limit/blocked-piece messages and the F8 zone/support-grace HUD use the game's selected language. English and Korean YAML are embedded in the DLL, so no external file is required. Untranslated keys/languages fall back to English. Administrative commands, diagnostics, logs and configuration descriptions retain their existing text.
+
+Following Homestead's translation file convention, optional `ZoneSavior.<Language>.yml` or `.yaml` files anywhere under `BepInEx/plugins` override that language's bundled entries. Use the game's language name, for example `ZoneSavior.Korean.yml`. Restart after editing external files; changing the in-game language updates the registered translations and F8 HUD. Preserve the numbered formatting placeholders such as `{0}` and `{1}` when translating.
+
+Release packages include `ZoneSavior.English.yml` and `ZoneSavior.Korean.yml` next to the DLL in both Thunderstore and Nexus ZIPs. These files are editable translation templates as well as runtime overrides when installed under `plugins`; keep only one external file per language to avoid duplicate overrides.
 
 `ZoneBundles/<tag>/manifest.yml` records the archive shape. Each `bundleNNN_<generation>.zonebundle.yml.gz` stores one source zone as a compact, gzip-compressed YAML bundle. ZoneSavior reads and writes these files directly; no manual extraction is required. New bundle files are committed by replacing the manifest only after every zone is saved successfully.
 

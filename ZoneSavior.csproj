@@ -155,6 +155,8 @@
         <Compile Include="ZoneBundleZdoData.cs"/>
         <Compile Include="ZoneBundleZdoSanitization.cs"/>
         <Compile Include="ZoneLimitConfiguration.cs"/>
+        <Compile Include="ZoneBuildRestrictions.cs"/>
+        <Compile Include="ZoneSaviorLocalization.cs"/>
         <Compile Include="ZonePieceCounter.cs"/>
         <Compile Include="ZonePlayerIdentity.cs"/>
         <Compile Include="ZoneStructureClassifier.cs"/>
@@ -168,6 +170,9 @@
         <Compile Include="ZoneTerrainContactSampler.cs"/>
     </ItemGroup>
     <ItemGroup>
+        <EmbeddedResource Include="translations\English.yml"/>
+        <EmbeddedResource Include="translations\Korean.yml"/>
+        <LocalizationFiles Include="translations\English.yml;translations\Korean.yml"/>
         <None Include="README.md"/>
         <Content Include="Libs\ServerSync.dll">
             <CopyToOutputDirectory>Always</CopyToOutputDirectory>
@@ -242,6 +247,7 @@
         </ItemGroup>
         <MakeDir Directories="$(PackageDir)"/>
         <Copy SourceFiles="@(PackageFiles)" DestinationFolder="$(PackageDir)"/>
+        <Copy SourceFiles="@(LocalizationFiles)" DestinationFiles="@(LocalizationFiles->'$(PackageDir)\$(AssemblyName).%(Filename)%(Extension)')"/>
         <ZipDirectory SourceDirectory="$(PackageDir)" DestinationFile="$(ThunderstorePackageRoot)\$(PackageName).zip" Overwrite="true"/>
         <RemoveDir Directories="$(PackageDir)"/>
     </Target>
@@ -252,6 +258,7 @@
         </ItemGroup>
         <MakeDir Directories="$(PackageDir)"/>
         <Copy SourceFiles="@(NexusPackageFiles)" DestinationFolder="$(PackageDir)"/>
+        <Copy SourceFiles="@(LocalizationFiles)" DestinationFiles="@(LocalizationFiles->'$(PackageDir)\$(AssemblyName).%(Filename)%(Extension)')"/>
         <ZipDirectory SourceDirectory="$(PackageDir)" DestinationFile="$(ProjectDir)\Nexus\ZoneSavior\$(PackageName).zip" Overwrite="true"/>
         <RemoveDir Directories="$(PackageDir)"/>
     </Target>

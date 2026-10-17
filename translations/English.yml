@@ -1,0 +1,6 @@
+# Copy as ZoneSavior.English.yml under BepInEx/plugins to customize these messages.
+# Preserve the numbered placeholders. Missing keys fall back to English.
+zs_build_limit_reached: "You can place up to {0} building pieces in this zone."
+zs_build_piece_blocked: "You cannot place '{0}' in this zone."
+zs_zone_coordinates: "Zone {0}, {1}"
+zs_support_grace: "Support grace {0}"

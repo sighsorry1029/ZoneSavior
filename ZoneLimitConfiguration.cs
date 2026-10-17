@@ -25,6 +25,7 @@ internal static class ZoneLimitConfiguration
     private static CustomSyncedValue<string>? _syncedYaml;
 
     public static bool Enabled => GeneralConfig.ZoneWearNTearLimitEnabled;
+    public static bool HasBlockedPieces { get; private set; }
 
     public static void Initialize(ConfigSync configSync, ManualLogSource logger)
     {
@@ -72,12 +73,6 @@ internal static class ZoneLimitConfiguration
 
     public static bool TryGetRule(Vector2i zone, out ZoneLimitRule rule)
     {
-        if (!Enabled)
-        {
-            rule = default;
-            return false;
-        }
-
         foreach (ZoneLimitRule candidate in Rules)
         {
             if (candidate.Contains(zone))
@@ -177,6 +172,7 @@ internal static class ZoneLimitConfiguration
     {
         Rules.Clear();
         Rules.AddRange(parsedRules);
+        HasBlockedPieces = Rules.Any(rule => rule.HasBlockedPieces);
 
         ProtectedPlayerIds.Clear();
         foreach (long playerId in parsedProtection.PlayerIds)
@@ -281,7 +277,19 @@ internal static class ZoneLimitConfiguration
             }
 
             bool countCreatorless = rawRule.CountCreatorless ?? defaultCountCreatorless;
-            rules.Add(new ZoneLimitRule(minX, maxX, minZ, maxZ, rawRule.Limit.Value, countCreatorless, rawRule.Name ?? $"rule_{i + 1}"));
+            HashSet<string> blockedPieces = new(StringComparer.Ordinal);
+            foreach (string? prefab in rawRule.BlockedPieces ?? [])
+            {
+                if (string.IsNullOrWhiteSpace(prefab))
+                {
+                    error = $"rules[{i}].blocked_pieces must contain non-empty prefab names.";
+                    return false;
+                }
+
+                blockedPieces.Add(prefab!.Trim());
+            }
+
+            rules.Add(new ZoneLimitRule(minX, maxX, minZ, maxZ, rawRule.Limit.Value, countCreatorless, rawRule.Name ?? $"rule_{i + 1}", blockedPieces));
         }
 
         return true;
@@ -311,6 +319,9 @@ internal static class ZoneLimitConfiguration
             "# Rules are evaluated from top to bottom.\n" +
             "# The first matching rule wins.\n" +
             "# If a zone does not match any rule, it is unlimited.\n" +
+            "# blocked_pieces uses exact, case-sensitive prefab names; omitted or [] means no bans.\n" +
+            "# Only the first matching rule applies, including its blocked_pieces list.\n" +
+            "# Piece bans apply to new player placement independently of the count-limit toggle.\n" +
             "archive_protection:\n" +
             "  steam_ids: []\n" +
             "  player_ids: []\n" +
@@ -326,6 +337,7 @@ internal static class ZoneLimitConfiguration
             "    z: [-1, 1]\n" +
             "    limit: 40\n" +
             "    count_creatorless: true\n" +
+            "    blocked_pieces: [] # Example: [portal_wood, piece_workbench]\n" +
             "  - name: outer_ring\n" +
             "    x: [-3, 3]\n" +
             "    z: [-3, 3]\n" +
@@ -367,11 +379,15 @@ internal sealed class ZoneLimitRuleFile
     public int? Limit { get; set; }
 
     public bool? CountCreatorless { get; set; }
+
+    public List<string>? BlockedPieces { get; set; }
 }
 
 internal readonly struct ZoneLimitRule
 {
-    public ZoneLimitRule(int minX, int maxX, int minZ, int maxZ, int limit, bool countCreatorless, string name)
+    private readonly HashSet<string>? _blockedPieces;
+
+    public ZoneLimitRule(int minX, int maxX, int minZ, int maxZ, int limit, bool countCreatorless, string name, HashSet<string>? blockedPieces = null)
     {
         MinX = minX;
         MaxX = maxX;
@@ -380,6 +396,7 @@ internal readonly struct ZoneLimitRule
         Limit = limit;
         CountCreatorless = countCreatorless;
         Name = name;
+        _blockedPieces = blockedPieces;
     }
 
     public int MinX { get; }
@@ -389,6 +406,9 @@ internal readonly struct ZoneLimitRule
     public int Limit { get; }
     public bool CountCreatorless { get; }
     public string Name { get; }
+    public bool HasBlockedPieces => _blockedPieces != null && _blockedPieces.Count > 0;
+
+    public bool IsPieceBlocked(string prefabName) => _blockedPieces?.Contains(prefabName) == true;
 
     public bool Contains(Vector2i zone)
     {

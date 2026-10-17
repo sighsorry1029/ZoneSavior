@@ -6,6 +6,7 @@ internal static class ZoneSaviorFeatureBootstrap
 {
     public static void Initialize(ManualLogSource logger)
     {
+        ZoneSaviorLocalization.Load(logger);
         ZoneSaviorInputBlockers.Initialize(logger);
         ZonePieceCounter.Initialize(logger);
         ZoneLimitConfiguration.Initialize(ZoneSaviorPlugin.ConfigSync, logger);

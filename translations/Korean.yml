@@ -1,0 +1,6 @@
+# BepInEx/plugins 아래 ZoneSavior.Korean.yml 파일에서 문구를 수정할 수 있습니다.
+# {0}, {1} 자리표시자는 유지하세요. 누락된 항목은 영어 문구를 사용합니다.
+zs_build_limit_reached: "이 구역에는 건축물을 최대 {0}개까지 설치할 수 있습니다."
+zs_build_piece_blocked: "이 구역에서는 '{0}' 설치가 제한됩니다."
+zs_zone_coordinates: "구역 {0}, {1}"
+zs_support_grace: "건축물 보호 {0}"

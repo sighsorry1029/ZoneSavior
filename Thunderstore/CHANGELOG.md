@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.3.1
+
+- Add optional `blocked_pieces` lists to `zones.yml` rules using exact, case-sensitive prefab names. The first matching rule supplies its whole policy; overlapping ban lists are not combined. Existing YAML remains valid, and invalid reloads retain the previous rules.
+- Reject banned pieces during normal player placement after updating the target position, before object creation, material consumption, stamina use or tool wear. Bans work independently of the WearNTear quantity-limit toggle and also cover pieces without WearNTear. Existing objects, network loading and administrative bundle restoration are unchanged.
+- Replace the technical WearNTear limit warning with a player-facing maximum-count message. Keep the existing quantity-counting and post-placement removal behavior; this release does not add server-side capacity reservations for simultaneous builders.
+- Add English and Korean localization for building-limit messages and the F8 zone/support-grace HUD, with English fallback and live game-language switching. Following Homestead's file convention, optional `ZoneSavior.<Language>.yml` or `.yaml` files under `BepInEx/plugins` override bundled translations at startup.
+- Include `ZoneSavior.English.yml` and `ZoneSavior.Korean.yml` in both Thunderstore and Nexus ZIPs, alongside the DLL's embedded fallback translations.
+- Build against original Valheim 1.0.20 assemblies with BepInExPack Valheim 5.4.2351 and the existing pinned ServerSync build. Update ZoneSavior on both the server and clients; placement restrictions use server-synchronized rules on the placing client and do not intercept external mods that directly create objects.
+- Add regression coverage for rule parsing and precedence, disabled quantity limits with active piece bans, the placement patch's original IL, translation resources, fallback and language-cache invalidation. Client and dedicated-server original-DLL checks are isolated managed tests; actual multiplayer placement, network synchronization and native Harmony execution still require in-game verification.
+
 ## 1.3.0
 
 - Automatic archives now include connected mixed-owner zones that share an eligible inactive creator, keeping structures together across zone boundaries. For adjacent `[A+B] [B+C] [C]` zones with A/B inactive and C active, one archive saves the first two zones and resets only `[A+B]`. This is the default policy; no separate aggressive setting is needed.

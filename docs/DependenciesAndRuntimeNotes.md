@@ -2,6 +2,8 @@
 
 ZoneSavior sections checked against the current source: 2026-09-03. Homestead background was last checked on 2026-05-02.
 
+ZoneSavior's manifest dependency and supported archive formats below were updated for 1.3.1 on 2026-10-17; the historical companion-mod observations were not re-audited.
+
 ## Runtime shape
 
 Homestead is the player-facing construction mod. ZoneSavior is the server zone maintenance mod. ZoneSavior is safest on a dedicated server because the long-inactive archive scanner needs authoritative access to the world ZDO list, server-side save/reset, and scheduled execution. A listen server can run the same code when the host is the server, but it is less ideal because scans only run while the host client is online and world ownership/loading can be affected by the host session.
@@ -104,11 +106,11 @@ Thunderstore dependencies use the `{team}-{package}-{version}` format documented
 
 ```json
 [
-  "denikson-BepInExPack_Valheim-5.4.2333"
+  "denikson-BepInExPack_Valheim-5.4.2351"
 ]
 ```
 
-All previous manifest and bundle versions are intentionally not loaded or converted, including uncompressed bundles and bundles saved with the old World Edit Commands `DataEntry` payload. If the original world data still exists, create a new archive from that live world with the current ZoneSavior version to get the current compressed format and `zs-zdo-v1` payloads.
+Manifest versions 2 and 3 and compressed bundle payload version 3 are supported. Older formats, including uncompressed bundles and bundles saved with the old World Edit Commands `DataEntry` payload, are not loaded or converted. If the original world data still exists, create a new archive from that live world with the current ZoneSavior version to get the current compressed format and `zs-zdo-v1` payloads.
 
 ## Referenced mod summaries
 

@@ -81,6 +81,8 @@ BepInEx/config/ZoneSavior/zones.yml
 
 Every `zones.yml` rule must include an explicit non-negative `limit`. ZoneSavior parses the current schema directly and does not use a file-level version field.
 
+Rules may also declare `blocked_pieces: [portal_wood, piece_workbench]` using exact prefab names. The first matching rule wins for both its limit and its ban list; lists are not inherited from later overlapping rules. An omitted/empty list has no bans. Bans apply to normal new player placement independently of the quantity-limit toggle, require the updated mod on the placing client, and do not delete existing objects or alter administrative save/restore operations. The existing quantity limiter is still a loaded-object counter with post-placement removal, not server-reserved capacity.
+
 Mode arguments:
 
 - `dry` or `dry-run`: scan and report only.

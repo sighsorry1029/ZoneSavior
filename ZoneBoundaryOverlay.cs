@@ -24,6 +24,7 @@ internal static class ZoneBoundaryOverlay
     private static Vector2i _lastHudZone;
     // -1 means no grace; MinValue forces the first update of a new HUD.
     private static long _lastHudGraceSeconds = long.MinValue;
+    private static int _lastHudLocalizationRevision = -1;
     private static float _nextRefreshTime;
 
     public static void Update()
@@ -258,20 +259,22 @@ internal static class ZoneBoundaryOverlay
 
         bool hasGrace = ZoneBundleSupportGrace.TryGetRemaining(zone, out TimeSpan remaining);
         long graceSeconds = hasGrace ? remaining.Ticks / TimeSpan.TicksPerSecond : -1L;
-        if (zone.x == _lastHudZone.x && zone.y == _lastHudZone.y && graceSeconds == _lastHudGraceSeconds)
+        if (zone.x == _lastHudZone.x && zone.y == _lastHudZone.y && graceSeconds == _lastHudGraceSeconds &&
+            _lastHudLocalizationRevision == ZoneSaviorLocalization.Revision)
         {
             return;
         }
 
-        string text = $"Zone {zone.x}, {zone.y}";
+        string text = ZoneSaviorLocalization.Format("zs_zone_coordinates", zone.x, zone.y);
         if (hasGrace)
         {
-            text += $"\nSupport grace {FormatRemaining(remaining)}";
+            text += "\n" + ZoneSaviorLocalization.Format("zs_support_grace", FormatRemaining(remaining));
         }
 
         _hudText.text = text;
         _lastHudZone = zone;
         _lastHudGraceSeconds = graceSeconds;
+        _lastHudLocalizationRevision = ZoneSaviorLocalization.Revision;
     }
 
     private static string FormatRemaining(TimeSpan remaining)

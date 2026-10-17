@@ -147,7 +147,7 @@ internal static class ZonePieceCounter
         bool rejected = zoneCount > rule.Limit;
         if (rejected)
         {
-            RejectPlacement(piece, zoneCount, rule.Limit);
+            RejectPlacement(piece, rule.Limit);
         }
 
         if (piece.IsCreator())
@@ -288,12 +288,12 @@ internal static class ZonePieceCounter
         ZoneCounts[zone] = newCount;
     }
 
-    private static void RejectPlacement(Piece piece, int zoneCount, int limit)
+    private static void RejectPlacement(Piece piece, int limit)
     {
-        string message = $"WearNTear zone limit reached ({zoneCount}/{limit})";
         if (piece.IsCreator() && Player.m_localPlayer != null)
         {
-            Player.m_localPlayer.Message(MessageHud.MessageType.Center, message);
+            Player.m_localPlayer.Message(MessageHud.MessageType.Center,
+                ZoneSaviorLocalization.Format("zs_build_limit_reached", limit));
         }
 
         WearNTear? wearNTear = piece.GetComponent<WearNTear>();

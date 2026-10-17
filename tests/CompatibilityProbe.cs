@@ -37,6 +37,7 @@ public static class CompatibilityProbe
                 Check(true, "Cached private access binding: " + name);
             }
             CheckPatches(mod);
+            BuildRulesRegression.Run(mod);
             CheckSyncedValue(mod);
             CheckZdoAndZones(mod);
             CheckResetSnapshots(mod);
