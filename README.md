@@ -6,8 +6,6 @@ Archive inactive-player structures and tamed animals per zone, save/load/restore
 
 ZoneSavior is a Valheim server maintenance mod for zone-based cleanup, archive, restore, and build-count control.
 
-ZoneSavior **1.3.1** builds against original Valheim **1.0.20** game assemblies and requires BepInExPack Valheim **5.4.2351**. It includes a pinned ServerSync compatibility build. Existing ZoneSavior config keys, RPC formats and bundle payload format remain unchanged. New automatic archives use manifest version 3 to distinguish saved zones from reset zones; these manifests require ZoneSavior 1.3.0 or later. Manual archives keep manifest version 2, and existing manifest version 2/bundle version 3 archives remain readable. Update the server and clients running ZoneSavior together to satisfy the existing synchronized-version requirement.
-
 It can:
 
 - archive inactive player structures into zone bundle files
@@ -130,6 +128,16 @@ Automatic archives keep structures together across owner boundaries. Adjacent zo
 For adjacent zones `[A+B] [B+C] [C]`, with A/B eligible and C active, one tag saves both `[A+B]` and `[B+C]`. Only `[A+B]` is reset; `[B+C]` and `[C]` remain. The saved `[B+C]` snapshot contains all normally saved structures and tamed animals in that zone, including C's objects. Eligibility, recipe/save filters, minimum count and per-run limits still apply.
 
 Before and during a saved reset, the server rechecks the saved state of creator-owned objects and tamed animals. Added/changed objects, changed container payloads or unexplained disappearances stop the affected reset. Normal inactivity scans also recheck eligibility and stop on a reconnect; an explicit Steam ID remains an administrator override of owner inactivity/protection. Spawned-object chains cannot delete outside the reset zone. The manifest records intent immediately before mutation and records each successfully reset zone separately. A failed preflight leaves the zone intact; an interrupted reset after mutation leaves a pending marker and blocks loading that tag until the partial world state has been reviewed. This is a conservative stop, not an automatic rollback.
+
+## Empty Chunk Saves and Optional Mods
+
+On the host or dedicated server, ZoneSavior includes previously saved chunks that become completely empty in the game's next normal save. This prevents old objects from returning because an empty chunk was omitted. A save chunk spans 8×8 to 64×64 zones; resetting one zone does not necessarily empty a chunk. The patch preserves the game's dirty-state and save-failure handling and does not force an immediate save or repair existing duplicates.
+
+Upgrade World is optional. When its complete, recognized empty-chunk cleanup is active, ZoneSavior delegates to it instead of also writing empty replacement files. Recognition checks the active patches and the relevant implementation/shared state, not a fixed release number or whole-DLL hash. FreshWorld can also coexist: already scheduled replacements are not added or counted twice.
+
+An unknown or incomplete Upgrade World save contract disables reset scans and bundle loading/target replacement until restart after resolving the mod combination. Ordinary world saves, F8, build rules, queries, dry runs and save-only archives remain available. Checks run after initial plugin registration and at save/mutation boundaries; original implementation analysis is cached for the loaded assembly's lifetime. Runtime DLL replacement is unsupported.
+
+If compatibility changes during an operation, subsequent mutation batches stop and existing cleanup/failure reporting runs. Completed changes are not rolled back automatically; reset journals retain their pending state where applicable. An already dispatched client terrain request may finish before the host stops the next step. Existing support grace remains active for partially restored structures.
 
 ## Terrain Restore
 
@@ -300,20 +308,6 @@ Restore an archive to its original zones:
 ```text
 zs_loadzone auto_halla_c178 restore
 ```
-## Development verification
-
-Build and update the local game plugin after merging:
-
-```powershell
-dotnet build ZoneSavior.csproj -c Debug -p:DeployToGame=true
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/Run-GameCompatibility.ps1
-```
-
-`Run-GameCompatibility.ps1` runs the existing 155 structure and 560 terrain-placement assertions, automatic-archive planning/manifest/restore and state-change regressions, plus original-API, Harmony-binding, cached-access and ZDO-codec checks in a disposable process using the installed Unity Mono runtime. Use `-GameManaged <original dedicated-server Managed directory>` for the server assembly set. Temporary test artifacts are retained and their path is printed. No Unity scene, real socket, world or native Harmony detour is started. Windows PowerShell's CLR cannot load every new game type; use this Mono runner for the complete suite rather than the older standalone terrain test host.
-
-The separate ServerSync source/build provenance is in `Libs/ServerSync.Compatibility.md`. Actual client/host/dedicated gameplay still needs confirmation: startup, F8, build limits, save/reset/restore including portals and container contents, terrain placement on both slope directions, non-admin rejection, reconnect and settings synchronization.
-
-For mixed-owner archives, verify the `[A+B] [B+C] [C]` case on a disposable world copy: compare the saved entries, retained container contents and tamed animals, reset exactly the first zone, then restore only that zone. Also check `source` and full relocation, a reconnect/content change during saving, cross-zone Spawned links, and interruption before/after the first deletion. A retained building may depend on support in the reset zone; automatic-archive membership does not identify structural dependencies or freeze the game's collapse simulation.
 
 ## Github
 https://github.com/sighsorry1029/ZoneSavior

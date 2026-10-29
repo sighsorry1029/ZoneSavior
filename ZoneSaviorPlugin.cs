@@ -12,7 +12,7 @@ namespace ZoneSavior;
 public class ZoneSaviorPlugin : BaseUnityPlugin
 {
     internal const string ModName = "ZoneSavior";
-    internal const string ModVersion = "1.3.1";
+    internal const string ModVersion = "1.3.2";
     internal const string Author = "sighsorry";
     internal const string ModGUID = $"{Author}.{ModName}";
     internal const string DataStorageFolder = "ZoneSavior";
@@ -57,6 +57,7 @@ public class ZoneSaviorPlugin : BaseUnityPlugin
     public void Awake()
     {
         Instance = this;
+        ZoneEmptyChunkSaveCompatibility.Reset(ZoneSaviorLogger);
         WithConfigSaveSuppressed(() =>
         {
             BindConfiguration();
@@ -68,14 +69,29 @@ public class ZoneSaviorPlugin : BaseUnityPlugin
         });
     }
 
+    private void Start()
+    {
+        // Start runs after plugin Awake registration; mutation and save boundaries recheck
+        // the active patches, including any registered later by optional mods.
+        ZoneEmptyChunkSaveCompatibility.Check();
+    }
+
     private void OnDestroy()
     {
-        WithConfigSaveSuppressed(Config.Save);
-        ZoneSaviorFeatureBootstrap.Shutdown();
+        try
+        {
+            WithConfigSaveSuppressed(Config.Save);
+            ZoneSaviorFeatureBootstrap.Shutdown();
 
-        _configWatcher?.Dispose();
-        _zoneRuleWatcher?.Dispose();
-        _activityWatcher?.Dispose();
+            _configWatcher?.Dispose();
+            _zoneRuleWatcher?.Dispose();
+            _activityWatcher?.Dispose();
+        }
+        finally
+        {
+            _harmony.Unpatch(AccessTools.DeclaredMethod(typeof(ZDOMan), "GetSaveClonePerChunk"),
+                AccessTools.DeclaredMethod(typeof(ZoneEmptyChunkSavePatch), "Postfix"));
+        }
     }
 
     private void Update()

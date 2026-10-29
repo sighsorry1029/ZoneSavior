@@ -170,6 +170,12 @@ internal static partial class ZoneBundleCommands
     private static bool CanContinueReset(Vector2i zone, Func<Vector2i, bool>? canResetZone, out string? failure)
     {
         failure = null;
+        if (ZoneEmptyChunkSaveCompatibility.Check() == ZoneEmptyChunkSaveCompatibility.Strategy.Unsupported)
+        {
+            failure = ZoneEmptyChunkSaveCompatibility.DisabledReason;
+            return false;
+        }
+
         if (canResetZone != null && !canResetZone(zone))
         {
             failure = $"Zone {zone} is no longer eligible for reset.";
@@ -235,6 +241,7 @@ internal static partial class ZoneBundleCommands
     private static IEnumerator ClearTargetZoneAsync(Vector2i targetZone, Action<int> onComplete,
         HashSet<Vector2i>? allowedTargetZones = null)
     {
+        ZoneEmptyChunkSaveCompatibility.RequireSafeMutation();
         if (allowedTargetZones != null && !allowedTargetZones.Contains(targetZone))
         {
             throw new InvalidOperationException($"Load target zone {targetZone} is outside the allowed target zones.");
@@ -245,21 +252,29 @@ internal static partial class ZoneBundleCommands
 
         int removed = 0;
         int processedSinceYield = 0;
-        foreach (ZDOID id in objects.Select(zdo => zdo.m_uid).ToArray())
+        try
         {
-            ZDO? zdo = ZDOMan.instance.GetZDO(id);
-            removed += TryDestroyOverwritableZdo(zdo, allowedTargetZones) ? 1 : 0;
-
-            processedSinceYield++;
-            if (processedSinceYield >= ResetBatchSize)
+            foreach (ZDOID id in objects.Select(zdo => zdo.m_uid).ToArray())
             {
-                DataHelper.FlushDestroyed();
-                processedSinceYield = 0;
-                yield return null;
+                ZDO? zdo = ZDOMan.instance.GetZDO(id);
+                removed += TryDestroyOverwritableZdo(zdo, allowedTargetZones) ? 1 : 0;
+
+                processedSinceYield++;
+                if (processedSinceYield >= ResetBatchSize)
+                {
+                    DataHelper.FlushDestroyed();
+                    processedSinceYield = 0;
+                    yield return null;
+                    ZoneEmptyChunkSaveCompatibility.RequireSafeMutation();
+                }
             }
         }
-
-        DataHelper.FlushDestroyed();
+        finally
+        {
+            // Complete notifications for objects already removed even when a later batch
+            // is refused or the coroutine is disposed. Never guard the cleanup itself.
+            DataHelper.FlushDestroyed();
+        }
         onComplete(removed);
     }
 

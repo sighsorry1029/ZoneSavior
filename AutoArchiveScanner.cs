@@ -49,6 +49,16 @@ internal static class AutoArchiveScanner
             yield break;
         }
 
+        if (!options.DryRun && options.ResetAfterSave &&
+            ZoneEmptyChunkSaveCompatibility.Check() == ZoneEmptyChunkSaveCompatibility.Strategy.Unsupported)
+        {
+            // Record a normal failed admission so automatic scheduling does not retry every
+            // frame. Explicit save-only scans and dry runs remain available.
+            run.Messages.Add("Reset scan not started: " + ZoneEmptyChunkSaveCompatibility.DisabledReason);
+            onComplete(run);
+            yield break;
+        }
+
         ZoneSaviorBuildRecipeRules.RefreshIndex();
         PlayerActivityTracker.TrackOnlinePlayers(utcNow);
 

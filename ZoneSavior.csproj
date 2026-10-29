@@ -138,6 +138,9 @@
         <Compile Include="ZoneSaviorCoroutines.cs"/>
         <Compile Include="ZoneSaviorUtilities.cs"/>
         <Compile Include="ZoneSaviorGameAccess.cs"/>
+        <Compile Include="ZoneEmptyChunkSavePatch.cs"/>
+        <Compile Include="ZoneEmptyChunkSaveCompatibility.cs"/>
+        <Compile Include="ZoneUpgradeWorldSaveContract.cs"/>
         <Compile Include="PlayerActivityTracker.cs"/>
         <Compile Include="Properties\ZoneSaviorAssemblyInfo.cs"/>
         <Compile Include="ZoneBoundaryOverlay.cs"/>

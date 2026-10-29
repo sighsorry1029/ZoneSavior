@@ -458,6 +458,10 @@ internal static partial class ZoneBundleTerrain
             yield break;
         }
 
+        // Calculation above can yield. Recheck on the host immediately before persisting;
+        // remote witnesses must not infer the host's optional mods from their local patches.
+        if (ZNet.instance != null && ZNet.instance.IsServer())
+            ZoneEmptyChunkSaveCompatibility.RequireSafeMutation();
         TerrainComp compiler = heightmap.GetAndCreateTerrainCompiler();
         PersistSupportFillTerrain(compiler, width, worldHeights);
         heightmap.Poke(delayed: 0, paintOnly: false);

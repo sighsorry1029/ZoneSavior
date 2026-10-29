@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.3.2
+
+- Persist previously saved chunks that become completely empty through the game's normal save path, preventing deleted objects from returning after a save and restart. Preserve native dirty-state and retry handling; this does not force an immediate save or remove existing duplicates.
+- Add optional Upgrade World compatibility based on its active empty-chunk patches and relevant implementation/shared-state contract. When recognized, delegate only empty-chunk save cleanup to Upgrade World; ZoneSavior retains its own archive, protection and reset policies. Neither Upgrade World nor FreshWorld becomes a required dependency.
+- Coexist with FreshWorld's empty-chunk correction without adding the same replacement or incrementing save counters twice, including different registration orders and configurations with all three mods.
+- Stop reset scans and bundle loading/target replacement when an incompatible or incomplete save contract is detected, while preserving normal world saves, F8, build rules, queries, dry runs and save-only archives. Recheck at mutation boundaries, flush prior deletion notifications, release operation state and retain pending reset journals on interruption. Resolve the mod combination and restart before resuming; an already dispatched client terrain request may finish.
+- Build against original Valheim 1.0.21 assemblies and update the BepInExPack Valheim requirement to 5.4.2360. Existing configuration keys, RPC and archive formats are unchanged. Update the server and clients running ZoneSavior together to satisfy the existing synchronized-version requirement.
+- Add original-DLL regression coverage for chunk selection, save/reload, private-field Harmony binding, optional-mod combinations and interrupted-operation cleanup. Client and dedicated-server checks run in isolated Mono; actual multiplayer/world startup, full world-save failure recovery and cloud storage still require in-game verification.
+
 ## 1.3.1
 
 - Add optional `blocked_pieces` lists to `zones.yml` rules using exact, case-sensitive prefab names. The first matching rule supplies its whole policy; overlapping ban lists are not combined. Existing YAML remains valid, and invalid reloads retain the previous rules.

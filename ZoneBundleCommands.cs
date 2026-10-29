@@ -379,6 +379,7 @@ internal static partial class ZoneBundleCommands
 
     private static IEnumerator ExecuteLoadRequestAsync(ZoneBundleCommandRequest request, Action<ZoneBundleCommandResult> onComplete, long terrainAssistPeer)
     {
+        ZoneEmptyChunkSaveCompatibility.RequireSafeMutation();
         if (float.IsNaN(request.YOffset) || float.IsInfinity(request.YOffset))
         {
             onComplete(ZoneBundleCommandResult.Fail("Load offset must be finite."));
@@ -1155,6 +1156,7 @@ internal static partial class ZoneBundleCommands
         Action<ZoneLoadTotals, TerrainPreparationResult, string> onComplete,
         bool restrictClearToTargets = false)
     {
+        ZoneEmptyChunkSaveCompatibility.RequireSafeMutation();
         // Validate every target before any client terrain preparation or overwrite.
         foreach (LoadWorkItem item in work) ZoneSaviorZones.ToGameZone(item.TargetZone);
         HashSet<Vector2i>? allowedTargetZones = restrictClearToTargets
@@ -1296,6 +1298,7 @@ internal static partial class ZoneBundleCommands
         Action<ZoneLoadTotals> onComplete,
         HashSet<Vector2i>? allowedTargetZones = null)
     {
+        ZoneEmptyChunkSaveCompatibility.RequireSafeMutation();
         List<LoadWorkItem> items = work.ToList();
         ZoneBundleSupportGrace.RegisterZones(items.Select(item => item.TargetZone));
 
@@ -1395,6 +1398,9 @@ internal static partial class ZoneBundleCommands
         bool includeTerrainSources,
         Action<ZoneBundleClientTerrainApplyResponse?> onComplete)
     {
+        // Check on the authoritative host before delegating a terrain mutation. An already
+        // dispatched request may finish; its response/timeout cleanup must remain available.
+        ZoneEmptyChunkSaveCompatibility.RequireSafeMutation();
         string requestId = System.Guid.NewGuid().ToString("N");
         List<ZoneBundleZone> targetZoneModels = targetItems
             .Select(item => item.TargetZone)
@@ -2070,6 +2076,7 @@ internal static partial class ZoneBundleCommands
         int removed = 0;
         yield return ClearTargetZoneAsync(targetZone, value => removed = value, allowedTargetZones);
         yield return null;
+        ZoneEmptyChunkSaveCompatibility.RequireSafeMutation();
 
         bool terrainApplied = false;
         if (applyTerrain && terrainContext != null)
@@ -2083,6 +2090,7 @@ internal static partial class ZoneBundleCommands
                 result => terrainApplied = result);
         }
 
+        ZoneEmptyChunkSaveCompatibility.RequireSafeMutation();
         int created = 0;
         int processedSinceYield = 0;
         Vector3 zoneCenter = ZoneSaviorZones.GetZonePos(targetZone);
@@ -2096,6 +2104,7 @@ internal static partial class ZoneBundleCommands
             {
                 processedSinceYield = 0;
                 yield return null;
+                ZoneEmptyChunkSaveCompatibility.RequireSafeMutation();
             }
         }
 
