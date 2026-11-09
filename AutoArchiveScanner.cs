@@ -680,16 +680,10 @@ internal static class AutoArchiveScanner
 
     private static string ResolvePlayerName(long playerId)
     {
-        if (!AutoArchiveStore.TryGetPlayerRecord(playerId, out PlayerActivityRecord record))
+        if (!AutoArchiveStore.TryResolveLastKnownPlayerName(playerId, out string name))
         {
             return "unknown";
         }
-
-        string name = record.Names
-            .LastOrDefault(candidate =>
-                !string.IsNullOrWhiteSpace(candidate) &&
-                !string.Equals(candidate, "unknown", StringComparison.OrdinalIgnoreCase) &&
-                !string.Equals(candidate, "manual", StringComparison.OrdinalIgnoreCase)) ?? "unknown";
 
         return ZoneSaviorPaths.SanitizeTagToken(name);
     }

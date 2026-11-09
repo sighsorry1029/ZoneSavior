@@ -37,6 +37,10 @@ BepInEx/config/
 
 `activity.yml` stores player activity, scan state, and recent scan records. ZoneSavior reloads it conservatively at runtime: broken YAML, dirty runtime state, and active scans are ignored.
 
+Its `character_names` map records the last Valheim character name actually observed for each player ID. Account-level `players`, name history, inactivity timestamps, and protection rules remain separate and unchanged. Existing account aliases or a piece's `creatorName` value are not converted into character names: offline lookup stays unknown until an updated server observes that character during connection or its existing periodic activity check. Automatic archive tags and newly captured bundle creator labels use this exact mapping; existing bundle metadata and world ZDO data are preserved.
+
+The optional administrator-only creator-name RPC supports protocol 2 (exact character names) and protocol 1 clients, echoing the requested protocol version. Both versions use the same exact mapping; an unobserved ID returns not found rather than another character's or account's name. Clients requiring exact-name semantics should request version 2 and reject version 1 responses from older servers.
+
 `zones.yml` stores zone limits and archive protection rules. Every rule must declare a non-negative `limit`. Steam IDs are the best long-term protection key; player names are convenient but can change.
 
 ### Building rules

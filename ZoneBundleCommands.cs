@@ -727,18 +727,16 @@ internal static partial class ZoneBundleCommands
             .Keys
             .Where(playerId => playerId != 0L)
             .OrderBy(playerId => playerId)
-            .Select(playerId => BuildCreatorPlayer(
-                playerId,
-                creatorNames.TryGetValue(playerId, out string observedName) ? observedName : ""))
+            .Select(BuildCreatorPlayer)
             .ToList();
     }
 
-    private static ZoneBundleCreatorPlayer BuildCreatorPlayer(long playerId, string observedName)
+    private static ZoneBundleCreatorPlayer BuildCreatorPlayer(long playerId)
     {
         return new ZoneBundleCreatorPlayer
         {
             PlayerId = playerId,
-            Name = ResolveCreatorName(playerId, observedName),
+            Name = ResolveCreatorName(playerId),
             PlatformId = ResolveCreatorPlatformId(playerId)
         };
     }
@@ -762,23 +760,11 @@ internal static partial class ZoneBundleCommands
         };
     }
 
-    private static string? ResolveCreatorName(long playerId, string observedName)
+    private static string? ResolveCreatorName(long playerId)
     {
-        string? normalizedObserved = NormalizeCreatorString(observedName);
-        if (normalizedObserved != null)
-        {
-            return normalizedObserved;
-        }
-
-        if (!AutoArchiveStore.TryGetPlayerRecord(playerId, out PlayerActivityRecord record))
-        {
-            return null;
-        }
-
-        return NormalizeCreatorString(record.Names.LastOrDefault(candidate =>
-            !string.IsNullOrWhiteSpace(candidate) &&
-            !string.Equals(candidate, "unknown", StringComparison.OrdinalIgnoreCase) &&
-            !string.Equals(candidate, "manual", StringComparison.OrdinalIgnoreCase)) ?? "");
+        return AutoArchiveStore.TryResolveLastKnownPlayerName(playerId, out string name)
+            ? NormalizeCreatorString(name)
+            : null;
     }
 
     private static string? ResolveCreatorPlatformId(long playerId)

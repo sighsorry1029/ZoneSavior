@@ -29,6 +29,9 @@ internal sealed class AutoArchiveState
     }
 
     public List<PlayerActivityRecord> Players { get; set; } = [];
+    // Character identity is separate from the account-level activity/alias history.
+    // Only names observed with a connected character's player ID belong here.
+    public Dictionary<long, string> CharacterNames { get; set; } = [];
     public List<ArchiveRunRecord> Runs { get; set; } = [];
 }
 

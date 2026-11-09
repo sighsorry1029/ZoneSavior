@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.3.3
+
+- Record the last actually observed Valheim character name separately for each player ID in `activity.yml`. Multiple characters on one account and character renames no longer reuse an unrelated account alias. Account-level activity, Steam ID targeting, inactivity and archive protection policies are preserved.
+- Keep existing account name history without guessing character mappings from it or a piece's `creatorName` field. Unobserved offline characters remain unknown until an updated server sees them connect or observes them during its existing periodic activity check.
+- Observe the explicit peer player ID when the game's `PlayerID` message arrives, with the existing character-ZDO fallback, so identity recording does not depend solely on the character ZDO arriving before the connection hooks.
+- Add exact-character-name lookup protocol 2 while retaining the same named RPC and supporting protocol 1 clients with the same safe resolver. Responses echo the request version; administrator checks, world validation and rate limits remain unchanged.
+- Use exact character mappings for new automatic archive tags and bundle creator labels. Preserve existing bundle metadata, world ZDO values, archive contents and restore behavior. Update ZoneSavior on the server and clients together for its existing synchronized-version requirement.
+- Add regression coverage for independent character names, rename/revert, account history preservation, unverified-name isolation, YAML round trips and both RPC versions. Build and isolated original-DLL Unity Mono checks pass; actual host/dedicated-server connections and multiplayer RPC execution still require in-game verification.
+
 ## 1.3.2
 
 - Persist previously saved chunks that become completely empty through the game's normal save path, preventing deleted objects from returning after a save and restart. Preserve native dirty-state and retry handling; this does not force an immediate save or remove existing duplicates.

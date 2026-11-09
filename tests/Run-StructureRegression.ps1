@@ -163,6 +163,117 @@ public static class StructureRegression
         entries.Clear();
         System.Console.WriteLine("PASS grace cleanup: empty, future, expiry boundary, repeated cleanup");
     }
+    private static void CharacterNames(Assembly assembly, DateTime now)
+    {
+        object legacy = Record("steam:76561198000000000", new long[] { 101, 102 }, new[] { "OldA", "OldB" }, now);
+        object state = State(legacy);
+        Call(store, "ReplaceState", state);
+        CheckName(101, null, "Legacy account aliases do not identify a character");
+        CheckName(102, null, "A shared account cannot assign its last alias to every character");
+        Call(store, "RecordUnknownPlayer", 103L, now, "UnverifiedPieceName");
+        CheckName(103, null, "Scanner piece metadata cannot populate exact character names");
+        Call(store, "RecordPlayerSeen", "steam:76561198000000000", 101L, "Viking A", now.AddMinutes(1));
+        Call(store, "RecordPlayerSeen", "steam:76561198000000000", 102L, "Viking B", now.AddMinutes(2));
+        CheckName(101, "Viking A", "Second character login preserves first character name");
+        CheckName(102, "Viking B", "Second character has an independent name");
+        Call(store, "RecordPlayerSeen", "steam:76561198000000000", 101L, "Renamed A", now.AddMinutes(3));
+        CheckName(101, "Renamed A", "Rename replaces last observed character name");
+        Call(store, "RecordPlayerSeen", "steam:76561198000000000", 101L, "Viking A", now.AddMinutes(4));
+        CheckName(101, "Viking A", "A to B to A updates even when the account already contains that alias");
+        Call(store, "RecordPlayerSeen", "steam:76561198000000000", 101L, "  ", now.AddMinutes(5));
+        CheckName(101, "Viking A", "Empty handshake name cannot erase a known character");
+        Call(store, "RecordPlayerSeen", "steam:76561198000000000", 0L, "NoId", now.AddMinutes(6));
+        CheckName(0, null, "Zero player ID cannot acquire a character name");
+        Sequence(legacy, "PlayerIds", 101L, 102L);
+        Sequence(legacy, "Names", "OldA", "OldB", "Viking A", "Viking B", "Renamed A", "  ", "NoId");
+        Check((DateTime)Get(legacy, "LastSeenUtc") == now.AddMinutes(6), "Account-level activity remains shared across characters");
+        object[] accountQuery = { "76561198000000000", null, null };
+        Check((bool)store.GetMethod("TryGetPlayerIdsBySteamId", Static).Invoke(null, accountQuery), "Steam account lookup survives exact-name mapping");
+        Check(((IList)accountQuery[1]).Count == 2, "Steam targeting still covers both characters");
+
+        // A scanner-only record may later become a verified account record. Its
+        // old alias remains history but must never overwrite the connected name.
+        Call(store, "RecordPlayerSeen", "steam:76561198000000000", 103L, "Observed C", now.AddMinutes(7));
+        CheckName(103, "Observed C", "Account merge records an actual character observation");
+        CheckName(101, "Viking A", "Account merge preserves unrelated character mappings");
+        Call(store, "RecordUnknownPlayer", 103L, now.AddMinutes(8), "AnotherPieceAlias");
+        CheckName(103, "Observed C", "Scanner alias cannot overwrite an observed character");
+        Call(store, "RecordPlayerSeen", "steam:76561198000000000", 104L, "manual", now.AddMinutes(9));
+        CheckName(104, "manual", "An actually observed character named manual is not an alias sentinel");
+
+        Type commands = assembly.GetType("ZoneSavior.ZoneBundleCommands", true);
+        var observed = new Dictionary<long, string> { { 101, "WrongPieceName" }, { 999, "UnverifiedPieceName" } };
+        IList creators = (IList)Call(commands, "BuildSourceZoneCreators", observed);
+        Check((string)Get(creators[0], "Name") == "Viking A", "New bundle metadata prefers exact character mapping over piece text");
+        Check(Get(creators[1], "Name") == null, "New bundle metadata cannot infer an unobserved character name");
+        CheckName(999, null, "Bundle capture cannot seed character mapping from piece text");
+        Set(creators[1], "Name", "HistoricalBundleName");
+        object clone = Call(commands, "CloneCreatorPlayer", creators[1]);
+        Check((string)Get(clone, "Name") == "HistoricalBundleName", "Existing bundle metadata remains preserved on clone/restore");
+        Type scanner = assembly.GetType("ZoneSavior.AutoArchiveScanner", true);
+        Check((string)Call(scanner, "ResolvePlayerName", 102L) == "Viking_B", "Archive token uses the correct character");
+        Check((string)Call(scanner, "ResolvePlayerName", 999L) == "unknown", "Archive token fails closed without observation");
+
+        FieldInfo serializerField = store.GetField("Serializer", Static);
+        FieldInfo deserializerField = store.GetField("Deserializer", Static);
+        MethodInfo serialize = serializerField.FieldType.GetMethod("Serialize", new[] { typeof(object) });
+        MethodInfo deserialize = deserializerField.FieldType.GetMethod("Deserialize", new[] { typeof(string), typeof(Type) });
+        string yaml = (string)serialize.Invoke(serializerField.GetValue(null), new[] { state });
+        Check(yaml.Contains("character_names:"), "Exact-name map has a separate YAML field");
+        object roundTrip = deserialize.Invoke(deserializerField.GetValue(null), new object[] { yaml, stateType });
+        Call(store, "ValidateState", roundTrip);
+        Call(store, "ReplaceState", roundTrip);
+        CheckName(101, "Viking A", "Exact name survives YAML round trip");
+        CheckName(102, "Viking B", "Same-account second name survives YAML round trip");
+        Check(((IList)Get(roundTrip, "Players")).Count == ((IList)Get(state, "Players")).Count, "YAML preserves account history");
+        string oldYaml = "version: 1\nplayers:\n- platform_id: steam:76561198000000000\n  player_ids: [101, 102]\n  names: [OldA, OldB]\nruns: []\n";
+        object oldState = deserialize.Invoke(deserializerField.GetValue(null), new object[] { oldYaml, stateType });
+        Call(store, "ValidateState", oldState);
+        Call(store, "ReplaceState", oldState);
+        CheckName(101, null, "Old YAML remains readable without guessing a character mapping");
+        Sequence(((IList)Get(oldState, "Players"))[0], "Names", "OldA", "OldB");
+        Check(((IDictionary)Get(oldState, "CharacterNames")).Count == 0, "Old YAML does not backfill names from account aliases");
+        Set(oldState, "CharacterNames", null);
+        Call(store, "ReplaceState", oldState);
+        CheckName(101, null, "Explicitly absent optional name map does not discard account history");
+        System.Console.WriteLine("PASS character identity: independent names, rename, legacy isolation, account preservation, bundle labels and YAML round trip");
+    }
+    private static void CheckName(long id, string expected, string message)
+    {
+        object[] args = { id, null };
+        bool found = (bool)store.GetMethod("TryResolveLastKnownPlayerName", Static).Invoke(null, args);
+        Check(found == (expected != null) && (string)args[1] == (expected ?? ""), message);
+    }
+    private static void CreatorProtocol(Assembly assembly, DateTime now)
+    {
+        Type protocol = assembly.GetType("ZoneSavior.ZoneSaviorCreatorNameLookupProtocol", true);
+        Type rpc = assembly.GetType("ZoneSavior.CreatorNameLookupRpc", true);
+        Check((int)protocol.GetField("Version").GetRawConstantValue() == 2, "Current protocol advertises exact character semantics");
+        foreach (int version in new[] { -1, 0, 1, 2, 3, Int32.MaxValue })
+            Check((bool)Call(rpc, "IsSupportedVersion", version) == (version == 1 || version == 2), "Only wire versions 1 and 2 are supported: " + version);
+        foreach (int version in new[] { 1, 2 })
+        foreach (bool found in new[] { false, true })
+        {
+            string name = found ? "Viking A" : "";
+            object response = Call(rpc, "CreateResponse", version, 17L, 23L, 0, 101L, found, name);
+            Type package = response.GetType();
+            package.GetMethod("SetPos").Invoke(response, new object[] { 0 });
+            Check((int)package.GetMethod("ReadInt").Invoke(response, null) == version, "Response echoes requested protocol");
+            Check((long)package.GetMethod("ReadLong").Invoke(response, null) == 17L, "Response echoes request ID");
+            Check((long)package.GetMethod("ReadLong").Invoke(response, null) == 23L, "Response echoes world ID");
+            Check((int)package.GetMethod("ReadInt").Invoke(response, null) == 0, "Success status retains wire order");
+            Check((long)package.GetMethod("ReadLong").Invoke(response, null) == 101L, "Response echoes character ID");
+            Check((bool)package.GetMethod("ReadBool").Invoke(response, null) == found, "Found flag retains wire order");
+            Check((string)package.GetMethod("ReadString").Invoke(response, null) == name, "Response sends exact name or empty not-found result");
+            Check((int)package.GetMethod("GetPos").Invoke(response, null) == (int)package.GetMethod("Size").Invoke(response, null), "Response has no unexpected wire fields");
+        }
+        Call(rpc, "ClearRateLimits");
+        for (int i = 0; i < 8; i++) Check((bool)Call(rpc, "TryConsumeRequest", 7L, now), "Rate window permits bounded request " + i);
+        Check(!(bool)Call(rpc, "TryConsumeRequest", 7L, now), "Ninth lookup is still rate limited");
+        Check((bool)Call(rpc, "TryConsumeRequest", 7L, now.AddSeconds(5)), "Rate limit resets at existing window boundary");
+        Call(rpc, "ClearRateLimits");
+        System.Console.WriteLine("PASS creator lookup protocol: v1/v2 support and echo, exact wire layout, unchanged rate limits");
+    }
     private static void ArchiveResults(Assembly assembly)
     {
         Type commands = assembly.GetType("ZoneSavior.ZoneBundleCommands", true);
@@ -226,6 +337,8 @@ public static class StructureRegression
             RuntimeMerge(now);
             Normalization(now);
             ChainAndIndexes(now);
+            CharacterNames(assembly, now);
+            CreatorProtocol(assembly, now);
             Grace(assembly, now);
             ArchiveResults(assembly);
             System.Console.WriteLine("PASS " + assertions + " assertions: " + assemblyPath);

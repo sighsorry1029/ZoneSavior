@@ -78,8 +78,11 @@ internal static class PlayerActivityTracker
             return false;
         }
 
-        playerId = TryReadPlayerId(peer.m_characterID);
+        // PlayerID arrives independently of the character ZDO. Use the explicit
+        // profile ID so a short connection need not wait for the periodic scan.
+        playerId = peer.m_playerID != 0L ? peer.m_playerID : TryReadPlayerId(peer.m_characterID);
         platformId = ZonePlayerIdentity.ResolvePeerPlatformId(peer, playerId);
+        // SendPeerInfo supplies PlayerProfile.GetName(), not the platform display name.
         name = peer.m_playerName;
         return !string.IsNullOrWhiteSpace(platformId) &&
                (requireReady || playerId != 0L || !string.IsNullOrWhiteSpace(name));
@@ -127,6 +130,15 @@ internal static class PlayerActivityPeerInfoPatch
 
 [HarmonyPatch(typeof(ZNet), "RPC_CharacterID")]
 internal static class PlayerActivityCharacterIdPatch
+{
+    private static void Postfix(ZRpc rpc)
+    {
+        PlayerActivityTracker.TrackPeer(rpc);
+    }
+}
+
+[HarmonyPatch(typeof(ZNet), "RPC_PlayerID", typeof(ZRpc), typeof(long))]
+internal static class PlayerActivityPlayerIdPatch
 {
     private static void Postfix(ZRpc rpc)
     {

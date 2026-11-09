@@ -6,7 +6,8 @@ namespace ZoneSavior;
 
 public static class ZoneSaviorCreatorNameLookupProtocol
 {
-    public const int Version = 1;
+    // Version 2 guarantees an observed player ID -> character-name association.
+    public const int Version = 2;
     public const int RequestBytes = 28;
     public const int MaxResponseBytes = 512;
     public const int MaxNameCharacters = 128;
@@ -77,25 +78,25 @@ internal static class CreatorNameLookupRpc
 
         if (!authorized)
         {
-            SendResponse(sender, requestId, worldUid, ZoneSaviorCreatorNameLookupProtocol.StatusUnauthorized, playerId, false, "");
+            SendResponse(sender, version, requestId, worldUid, ZoneSaviorCreatorNameLookupProtocol.StatusUnauthorized, playerId, false, "");
             return;
         }
 
         if (!TryConsumeRequest(sender, DateTime.UtcNow))
         {
-            SendResponse(sender, requestId, worldUid, ZoneSaviorCreatorNameLookupProtocol.StatusRateLimited, playerId, false, "");
+            SendResponse(sender, version, requestId, worldUid, ZoneSaviorCreatorNameLookupProtocol.StatusRateLimited, playerId, false, "");
             return;
         }
 
         if (requestId == 0L || playerId == 0L)
         {
-            SendResponse(sender, requestId, worldUid, ZoneSaviorCreatorNameLookupProtocol.StatusMalformedRequest, playerId, false, "");
+            SendResponse(sender, version, requestId, worldUid, ZoneSaviorCreatorNameLookupProtocol.StatusMalformedRequest, playerId, false, "");
             return;
         }
 
-        if (version != ZoneSaviorCreatorNameLookupProtocol.Version)
+        if (!IsSupportedVersion(version))
         {
-            SendResponse(sender, requestId, worldUid, ZoneSaviorCreatorNameLookupProtocol.StatusUnsupportedVersion, playerId, false, "");
+            SendResponse(sender, version, requestId, worldUid, ZoneSaviorCreatorNameLookupProtocol.StatusUnsupportedVersion, playerId, false, "");
             return;
         }
 
@@ -106,13 +107,13 @@ internal static class CreatorNameLookupRpc
         }
         catch
         {
-            SendResponse(sender, requestId, worldUid, ZoneSaviorCreatorNameLookupProtocol.StatusServerError, playerId, false, "");
+            SendResponse(sender, version, requestId, worldUid, ZoneSaviorCreatorNameLookupProtocol.StatusServerError, playerId, false, "");
             return;
         }
 
         if (worldUid != serverWorldUid)
         {
-            SendResponse(sender, requestId, worldUid, ZoneSaviorCreatorNameLookupProtocol.StatusWorldMismatch, playerId, false, "");
+            SendResponse(sender, version, requestId, worldUid, ZoneSaviorCreatorNameLookupProtocol.StatusWorldMismatch, playerId, false, "");
             return;
         }
 
@@ -122,6 +123,7 @@ internal static class CreatorNameLookupRpc
             string name = found ? NormalizeName(storedName) : "";
             SendResponse(
                 sender,
+                version,
                 requestId,
                 worldUid,
                 ZoneSaviorCreatorNameLookupProtocol.StatusSuccess,
@@ -132,8 +134,14 @@ internal static class CreatorNameLookupRpc
         catch (Exception ex)
         {
             ZoneSaviorPlugin.ZoneSaviorLogger.LogWarning($"Creator name lookup failed: {ex.Message}");
-            SendResponse(sender, requestId, worldUid, ZoneSaviorCreatorNameLookupProtocol.StatusServerError, playerId, false, "");
+            SendResponse(sender, version, requestId, worldUid, ZoneSaviorCreatorNameLookupProtocol.StatusServerError, playerId, false, "");
         }
+    }
+
+    private static bool IsSupportedVersion(int version)
+    {
+        // Keep the version 1 wire contract, but never its ambiguous alias lookup.
+        return version == 1 || version == ZoneSaviorCreatorNameLookupProtocol.Version;
     }
 
     private static bool TryReadRequest(
@@ -219,6 +227,7 @@ internal static class CreatorNameLookupRpc
 
     private static void SendResponse(
         long target,
+        int version,
         long requestId,
         long worldUid,
         int status,
@@ -232,10 +241,11 @@ internal static class CreatorNameLookupRpc
             return;
         }
 
-        ZPackage response = CreateResponse(requestId, worldUid, status, playerId, found, name);
+        ZPackage response = CreateResponse(version, requestId, worldUid, status, playerId, found, name);
         if (response.Size() > ZoneSaviorCreatorNameLookupProtocol.MaxResponseBytes)
         {
             response = CreateResponse(
+                version,
                 requestId,
                 worldUid,
                 ZoneSaviorCreatorNameLookupProtocol.StatusServerError,
@@ -255,6 +265,7 @@ internal static class CreatorNameLookupRpc
     }
 
     private static ZPackage CreateResponse(
+        int version,
         long requestId,
         long worldUid,
         int status,
@@ -263,7 +274,7 @@ internal static class CreatorNameLookupRpc
         string name)
     {
         ZPackage response = new();
-        response.Write(ZoneSaviorCreatorNameLookupProtocol.Version);
+        response.Write(version);
         response.Write(requestId);
         response.Write(worldUid);
         response.Write(status);

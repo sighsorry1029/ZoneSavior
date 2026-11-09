@@ -187,6 +187,11 @@ internal static class AutoArchiveStore
 
             if (playerId != 0)
             {
+                if (!string.IsNullOrWhiteSpace(name))
+                {
+                    State.CharacterNames[playerId] = name.Trim();
+                }
+
                 PlayerActivityRecord? duplicate = PlayersById.TryGetValue(playerId, out PlayerActivityRecord indexedById)
                     ? indexedById
                     : null;
@@ -252,29 +257,17 @@ internal static class AutoArchiveStore
 
         lock (Sync)
         {
-            if (!PlayersById.TryGetValue(playerId, out PlayerActivityRecord record) || record.Names == null)
+            if (!State.CharacterNames.TryGetValue(playerId, out string observedName) ||
+                string.IsNullOrWhiteSpace(observedName))
             {
                 return false;
             }
 
-            for (int index = record.Names.Count - 1; index >= 0; index--)
-            {
-                string candidate = record.Names[index]?.Trim() ?? "";
-                if (candidate.Length == 0 ||
-                    string.Equals(candidate, "unknown", StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(candidate, "manual", StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                // Return an immutable value while still holding the store lock instead of
-                // exposing the mutable activity record or its aliases collection.
-                name = candidate;
-                return true;
-            }
+            // Account aliases cannot identify which of that account's characters
+            // used a name. Never infer a mapping from old Names or piece metadata.
+            name = observedName.Trim();
+            return true;
         }
-
-        return false;
     }
 
     public static bool TryGetPlayerIdsBySteamId(string steamId, out List<long> playerIds, out string normalizedSteamId)
@@ -500,6 +493,7 @@ internal static class AutoArchiveStore
 
     private static void ReplaceState(AutoArchiveState state)
     {
+        state.CharacterNames ??= [];
         NormalizePlayerRecords(state);
         BuildPlayerIndexes(
             state,
