@@ -90,6 +90,8 @@ public static class CompatibilityProbe
             foreach (var path in new[] { typeof(ZDO).Assembly.Location, modPath, ProbeContext.UpgradePath, freshPath })
                 System.Console.WriteLine("INPUT " + path + " SHA256=" + ProbeContext.Sha(path));
 
+            ManagedGameBoundary.InitializeZdo();
+
             // Suppress only diagnostics and the platform-backed cloud checks. Save selection,
             // mapping, file I/O, Harmony patches and compatibility decisions remain real.
             ProbeContext.BoundaryHarmony.Patch(typeof(UnityEngine.Application).GetProperty("persistentDataPath", ProbeContext.All)!.GetMethod!,

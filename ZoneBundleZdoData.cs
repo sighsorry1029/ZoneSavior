@@ -105,17 +105,35 @@ internal sealed class ZoneBundleZdoData
         Distant = zdo.Distant;
         ObjectType = zdo.Type;
 
-        // GetData exposes the live typed maps. Copy every map and byte buffer before yielding.
+        // GetData returns indexed views over live backing arrays in Valheim 1.0.30.
+        // Copy only Count entries, including every byte buffer, before yielding.
         // Connections remain intentionally excluded: restored objects receive new network IDs.
         ZDOExtraData.GetData(zdo.m_uid, out var floats, out var vecs, out var quats,
             out var ints, out var longs, out var strings, out var bytes, out _);
-        Strings = strings.ToDictionary(item => item.Key, item => item.Value);
-        Floats = floats.ToDictionary(item => item.Key, item => item.Value);
-        Ints = ints.ToDictionary(item => item.Key, item => item.Value);
-        Longs = longs.ToDictionary(item => item.Key, item => item.Value);
-        Vecs = vecs.ToDictionary(item => item.Key, item => item.Value);
-        Quats = quats.ToDictionary(item => item.Key, item => item.Value);
-        ByteArrays = bytes.ToDictionary(item => item.Key, item => item.Value.ToArray());
+        Strings = CopyValues(strings);
+        Floats = CopyValues(floats);
+        Ints = CopyValues(ints);
+        Longs = CopyValues(longs);
+        Vecs = CopyValues(vecs);
+        Quats = CopyValues(quats);
+        ByteArrays = new Dictionary<int, byte[]>(bytes.Count);
+        for (int i = 0; i < bytes.Count; i++)
+        {
+            KeyValuePair<int, byte[]> item = bytes[i];
+            ByteArrays.Add(item.Key, item.Value.ToArray());
+        }
+    }
+
+    private static Dictionary<int, T> CopyValues<T>(FastIterableKeyValues<int, T> values)
+    {
+        Dictionary<int, T> copy = new(values.Count);
+        for (int i = 0; i < values.Count; i++)
+        {
+            KeyValuePair<int, T> item = values[i];
+            copy.Add(item.Key, item.Value);
+        }
+
+        return copy;
     }
 
     private void Load(string payload)

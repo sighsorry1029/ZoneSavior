@@ -1,13 +1,21 @@
 param(
     [string] $GamePath = 'C:\Program Files (x86)\Steam\steamapps\common\Valheim',
     [string] $GameManaged = '',
-    [string] $ModDll = "$PSScriptRoot\..\bin\ZoneSavior\Debug\ZoneSavior.dll"
+    [string] $MonoRuntimeDirectory = '',
+    [string] $BepInExCore = '',
+    [string] $ModDll = ''
 )
 $ErrorActionPreference = 'Stop'
-$managed = if ($GameManaged) { $GameManaged } else { Join-Path $GamePath 'valheim_Data\Managed' }
-$core = Join-Path $GamePath 'BepInEx\core'
-$runtime = Join-Path $GamePath 'MonoBleedingEdge\EmbedRuntime'
-$config = Join-Path $GamePath 'MonoBleedingEdge\etc'
+if (!$ModDll) { $ModDll = Join-Path $PSScriptRoot '..\bin\ZoneSavior\Debug\ZoneSavior.dll' }
+if (!$GameManaged) {
+    $GameManaged = & dotnet msbuild "$PSScriptRoot/../ZoneSavior.csproj" -nologo -getProperty:CorlibPath
+    if ($LASTEXITCODE) { throw 'Could not resolve the build reference directory.' }
+}
+$managed = $GameManaged.Trim()
+$referenceGame = Split-Path (Split-Path $managed -Parent) -Parent
+$core = if ($BepInExCore) { $BepInExCore } else { Join-Path $GamePath 'BepInEx\core' }
+$runtime = if ($MonoRuntimeDirectory) { $MonoRuntimeDirectory } else { Join-Path $referenceGame 'MonoBleedingEdge\EmbedRuntime' }
+$config = Join-Path (Split-Path $runtime -Parent) 'etc'
 $framework = Join-Path ${env:ProgramFiles(x86)} 'Reference Assemblies\Microsoft\Framework\.NETFramework\v4.8'
 $sdk = @(& dotnet --list-sdks | Select-Object -Last 1)[0]
 if ($sdk -notmatch '^([^ ]+) \[(.+)\]$') { throw 'A .NET SDK is required.' }
@@ -30,7 +38,7 @@ $fixtures = foreach ($name in @('Structure','TerrainPlacement','AutoArchive')) {
     [IO.File]::WriteAllText($file, $match.Groups[1].Value)
     $file
 }
-& dotnet $compiler /nologo /noconfig /nostdlib+ /langversion:latest @references @gameReferences @libraryReferences /target:library "/out:$probe" "$PSScriptRoot/CompatibilityProbe.cs" "$PSScriptRoot/BuildRulesRegression.cs" @fixtures
+& dotnet $compiler /nologo /noconfig /nostdlib+ /langversion:latest @references @gameReferences @libraryReferences /target:library "/out:$probe" "$PSScriptRoot/CompatibilityProbe.cs" "$PSScriptRoot/BuildRulesRegression.cs" "$PSScriptRoot/ManagedGameBoundary.cs" "$PSScriptRoot/terrain1030/Terrain1030Regression.cs" @fixtures
 if ($LASTEXITCODE) { throw 'Mono probe compilation failed.' }
 $isolatedMod = Join-Path $directory 'ZoneSavior.dll'
 Copy-Item -LiteralPath $ModDll -Destination $isolatedMod

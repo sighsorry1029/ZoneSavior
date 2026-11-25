@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.3.4
+
+- Update for Valheim 1.0.30 using original game assemblies. Adapt bundle capture to the new indexed ZDO data collections while keeping independent snapshots of all typed values and item-content byte buffers. Existing bundle formats, destination ownership and restore policies are preserved.
+- Separate game compilation references from the local deployment path and use the same reference set for Unity UI assemblies. Compatibility runners now select the matching original game assemblies and Mono runtime.
+- Add regression coverage for ZDO snapshot isolation, existing bundle payloads, ownership/revision handling and native terrain format 2 with snow state. Client and dedicated-server original-DLL Mono checks cover existing build rules, localization, archive/restore and optional Upgrade World/FreshWorld empty-chunk handling. These isolated checks do not replace actual multiplayer or full-world save testing.
+- Simplify the README while preserving both original GIFs. Move detailed commands and configuration into the existing guide, clarify destination replacement and small-cluster reset behavior, and correct original-location restore scope for automatic archives.
+- Keep the BepInExPack Valheim requirement at 5.4.2360. Update ZoneSavior on the server and clients together for the existing synchronized-version requirement.
+
 ## 1.3.3
 
 - Record the last actually observed Valheim character name separately for each player ID in `activity.yml`. Multiple characters on one account and character renames no longer reuse an unrelated account alias. Account-level activity, Steam ID targeting, inactivity and archive protection policies are preserved.

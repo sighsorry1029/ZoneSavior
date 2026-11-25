@@ -3,14 +3,20 @@ param(
     [string] $GameManaged = '',
     [string] $MonoRuntimeDirectory = '',
     [string] $BepInExCore = '',
-    [string] $ModDll = "$PSScriptRoot\..\bin\ZoneSavior\Debug\ZoneSavior.dll",
+    [string] $ModDll = '',
     [Parameter(Mandatory = $true)] [string] $UpgradeWorldDll,
     [Parameter(Mandatory = $true)] [string] $FreshWorldDll
 )
 $ErrorActionPreference = 'Stop'
-$managed = if ($GameManaged) { $GameManaged } else { Join-Path $GamePath 'valheim_Data\Managed' }
+if (!$ModDll) { $ModDll = Join-Path $PSScriptRoot '..\bin\ZoneSavior\Debug\ZoneSavior.dll' }
+if (!$GameManaged) {
+    $GameManaged = & dotnet msbuild "$PSScriptRoot/../ZoneSavior.csproj" -nologo -getProperty:CorlibPath
+    if ($LASTEXITCODE) { throw 'Could not resolve the build reference directory.' }
+}
+$managed = $GameManaged.Trim()
+$referenceGame = Split-Path (Split-Path $managed -Parent) -Parent
 $core = if ($BepInExCore) { $BepInExCore } else { Join-Path $GamePath 'BepInEx\core' }
-$runtime = if ($MonoRuntimeDirectory) { $MonoRuntimeDirectory } else { Join-Path $GamePath 'MonoBleedingEdge\EmbedRuntime' }
+$runtime = if ($MonoRuntimeDirectory) { $MonoRuntimeDirectory } else { Join-Path $referenceGame 'MonoBleedingEdge\EmbedRuntime' }
 $config = Join-Path (Split-Path $runtime -Parent) 'etc'
 foreach ($path in @($ModDll, $UpgradeWorldDll, $FreshWorldDll, (Join-Path $managed 'assembly_valheim.dll'), (Join-Path $runtime 'mono-2.0-bdwgc.dll'))) {
     if (!(Test-Path -LiteralPath $path -PathType Leaf)) { throw "Required input not found: $path" }
@@ -29,7 +35,7 @@ if ($LASTEXITCODE) { throw 'Mono host compilation failed.' }
 $gameReferences = @('assembly_valheim.dll','assembly_utils.dll','assembly_guiutils.dll','UnityEngine.CoreModule.dll','netstandard.dll') | ForEach-Object { '/reference:' + (Join-Path $managed $_) }
 $libraryReferences = @('0Harmony.dll','BepInEx.dll','Mono.Cecil.dll') | ForEach-Object { '/reference:' + (Join-Path $core $_) }
 $sources = Get-ChildItem -LiteralPath "$PSScriptRoot/empty-chunks" -Filter '*.cs' | Select-Object -ExpandProperty FullName
-& dotnet $compiler /nologo /noconfig /nostdlib+ /langversion:latest /nullable:enable @references @gameReferences @libraryReferences /target:library "/out:$probe" @sources
+& dotnet $compiler /nologo /noconfig /nostdlib+ /langversion:latest /nullable:enable @references @gameReferences @libraryReferences /target:library "/out:$probe" "$PSScriptRoot/ManagedGameBoundary.cs" @sources
 if ($LASTEXITCODE) { throw 'Empty-chunk probe compilation failed.' }
 # Copy final plugin inputs and dependencies only into this disposable test folder.
 $isolatedMod = Join-Path $directory 'ZoneSavior.dll'

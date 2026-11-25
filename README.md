@@ -1,55 +1,58 @@
 # ZoneSavior
-Archive inactive-player structures and tamed animals per zone, save/load/restore zone bundles, track player activity, configure archive exclusions, and enforce per-zone WearNTear limits.
 
-![](https://i.ibb.co/ycMvZ9fj/Video-Project-26.gif) <br>
-![](https://i.ibb.co/G3czYNtr/zonearchive.gif) <br>
+Archive inactive players' buildings and tamed animals, then restore them in place or move them to a new zone. Set local building limits, block selected pieces, and let every player see zone boundaries.
 
-ZoneSavior is a Valheim server maintenance mod for zone-based cleanup, archive, restore, and build-count control.
 
-It can:
+![A saved base relocated to different terrain](https://i.ibb.co/ycMvZ9fj/Video-Project-26.gif)
 
-- archive inactive player structures into zone bundle files
-- restore saved bundles to the original place or a new zone
-- optionally reset archived source zones
-- enforce per-zone WearNTear limits from `zones.yml`
-- block selected building prefabs in matching zones before normal player placement
-- track player activity for inactive-owner cleanup
-- provide an optional client zone UI
+*Move a saved base to a new zone.*
 
-The zone UI hotkey (F8 by default) displays the current zone boundary with eight 64m corner extensions. The lines follow the terrain, with height samples every 4m, to help estimate neighboring zones.
+![An archived settlement restored inside zone boundaries](https://i.ibb.co/G3czYNtr/zonearchive.gif)
 
-## Files
+*Bring an archived settlement back into the world.*
 
-ZoneSavior uses one BepInEx config file and one data folder:
+## Getting started
 
-```text
-BepInEx/config/
-  sighsorry.ZoneSavior.cfg
-  ZoneSavior/
-    activity.yml
-    zones.yml
-    Diagnostics/
-    ZoneBundles/
-      tag_name/
-        manifest.yml
-        bundle001_<generation>.zonebundle.yml.gz
-```
+Install the same ZoneSavior version on the **server or host and all clients**, with BepInExPack Valheim. For manual installation, place `ZoneSavior.dll` in `BepInEx/plugins`.
 
-`activity.yml` stores player activity, scan state, and recent scan records. ZoneSavior reloads it conservatively at runtime: broken YAML, dirty runtime state, and active scans are ignored.
+Start the game or server once to create:
 
-Its `character_names` map records the last Valheim character name actually observed for each player ID. Account-level `players`, name history, inactivity timestamps, and protection rules remain separate and unchanged. Existing account aliases or a piece's `creatorName` value are not converted into character names: offline lookup stays unknown until an updated server observes that character during connection or its existing periodic activity check. Automatic archive tags and newly captured bundle creator labels use this exact mapping; existing bundle metadata and world ZDO data are preserved.
+- `BepInEx/config/sighsorry.ZoneSavior.cfg` — settings and automatic archive options.
+- `BepInEx/config/ZoneSavior/zones.yml` — building rules and archive protection.
+- `BepInEx/config/ZoneSavior/ZoneBundles/` — saved archives.
 
-The optional administrator-only creator-name RPC supports protocol 2 (exact character names) and protocol 1 clients, echoing the requested protocol version. Both versions use the same exact mapping; an unobserved ID returns not found rather than another character's or account's name. Clients requiring exact-name semantics should request version 2 and reject version 1 responses from older servers.
+Press **F8** to show your zone number and boundary. Anyone can use it; admin access is not required. Eight 64m extensions help you judge neighboring zones.
 
-`zones.yml` stores zone limits and archive protection rules. Every rule must declare a non-negative `limit`. Steam IDs are the best long-term protection key; player names are convenient but can change.
+Building messages and the zone HUD support **English and Korean**, with English fallback. Editable translation files are included with the mod.
 
-### Building rules
+## Archive and restore
 
-Rules match zone coordinates inclusively, from top to bottom. The first match supplies both the count policy and the optional `blocked_pieces` list; lists from overlapping rules are not merged. A limit applies to each individual zone, not the entire matching rectangle.
+Run management commands from the server console, RCON, or a server admin client. **Back up your world before resetting or loading: loading replaces existing objects in the destination zones.**
+
+| Task | Command |
+| --- | --- |
+| Preview inactive-player cleanup | `zs_scan dry` |
+| View the latest scan report | `zs_status` |
+| Archive without resetting | `zs_scan save` |
+| Archive and reset eligible zones | `zs_scan reset` |
+| Save one zone | `zs_savezone (-21,-4) my_base` |
+| Load at a new destination | `zs_loadzone my_base to (10,3)` |
+| Restore at the original location | `zs_loadzone my_base restore` |
+
+Automatic scans are **off by default**. To schedule them, set `Scan Interval Minutes` above `0`. Start with `Dry Run = On`; review the report before changing `Dry Run` or enabling `Reset After Save`. The default inactivity threshold is 30 days. Use `zones.yml` to protect players or zones from normal cleanup.
+
+Connected mixed-owner zones are saved so buildings crossing a boundary stay together, but active players' zones are kept. For `[A+B] [B+C] [C]`, with A/B inactive and C active, the first two zones are archived and only `[A+B]` is reset.
+
+- Original-location restore of an automatic reset archive restores only zones recorded as reset.
+- Relocating loads the whole saved archive, including mixed-zone containers and animals. Retained source objects remain, so relocation creates copies.
+- During reset runs, fully eligible clusters below `Minimum Pieces Per Cluster` are **reset without an archive**. Small mixed-owner clusters are skipped.
+- An interrupted reset can block loading that archive until its partial state is reviewed. There is no automatic rollback.
+
+## Building rules
+
+Edit `zones.yml` using zone coordinates, not world meters. Enable **`Zone WearNTear Limit`** in the config to enforce quantity limits; it is off by default. Piece bans work independently of this toggle.
 
 ```yaml
-defaults:
-  count_creatorless: false
 rules:
   - name: center_keep
     x: [-1, 1]
@@ -65,253 +68,23 @@ rules:
     limit: 100
 ```
 
-`blocked_pieces` uses exact, case-sensitive prefab names, not translated display names or wildcards. Omitted, null or empty lists allow all prefab types; blank entries are rejected and an invalid reload retains the previous configuration. Repeated names are deduplicated. The example blocks only new normal player placement of wooden portals and workbenches in the center zones. Existing objects, network loading and administrative bundle restore are unaffected. Administrators using normal placement follow the same rule.
+Ranges include both endpoints. **The first matching rule wins**, and each limit applies to one zone. Every rule needs a non-negative `limit`. `blocked_pieces` uses exact, case-sensitive prefab names; omitted lists allow all piece types. Zones with no matching rule are unrestricted.
 
-Piece bans operate independently of `Zone WearNTear Limit`, which still controls only the existing WearNTear quantity restriction. They also cover building pieces without WearNTear; `count_creatorless` changes only what contributes to the quantity count. A count limit of 50 allows 50 counted objects; it rejects the next one.
+Banned pieces are rejected before normal placement spends resources. Quantity limits count loaded structures and remove over-limit placements afterward; they do not reserve capacity for simultaneous builders. These restrictions need the mod on clients and do not cover other mods that bypass normal placement. Existing buildings and admin bundle restores are unaffected by piece bans.
 
-For dedicated servers, install this updated ZoneSavior build on both server and clients. The server supplies the YAML through the existing settings synchronization; the placing client rejects a banned prefab after refreshing the target position and before creating an object or spending materials, stamina or durability. This is not a server-only anti-bypass system. Other mods that directly instantiate objects or bypass `Player.TryPlacePiece` require separate integration. The existing count limit still uses loaded local structures and post-placement removal; it does not reserve capacity on the server for simultaneous builders.
+## Terrain support
 
-### Localization
+Bundles capture ground contacts to restore support under buildings. Keep source terrain loaded for accurate capture; relocation adjusts the archive's shared height, and `offset=Y` adds a manual adjustment. Different slopes can still leave buildings buried or unsupported because the game's normal ±8m terrain limit applies.
 
-Building-limit/blocked-piece messages and the F8 zone/support-grace HUD use the game's selected language. English and Korean YAML are embedded in the DLL, so no external file is required. Untranslated keys/languages fall back to English. Administrative commands, diagnostics, logs and configuration descriptions retain their existing text.
+Restored structures receive temporary support grace, configurable with `Zone Bundle Support Grace Minutes`; this protection ends on server restart. On a dedicated server, if destination terrain is unavailable, move a player with ZoneSavior near it and retry.
 
-Following Homestead's translation file convention, optional `ZoneSavior.<Language>.yml` or `.yaml` files anywhere under `BepInEx/plugins` override that language's bundled entries. Use the game's language name, for example `ZoneSavior.Korean.yml`. Restart after editing external files; changing the in-game language updates the registered translations and F8 HUD. Preserve the numbered formatting placeholders such as `{0}` and `{1}` when translating.
+## Compatibility
 
-Release packages include `ZoneSavior.English.yml` and `ZoneSavior.Korean.yml` next to the DLL in both Thunderstore and Nexus ZIPs. These files are editable translation templates as well as runtime overrides when installed under `plugins`; keep only one external file per language to avoid duplicate overrides.
+- **Upgrade World and FreshWorld are optional.** Empty-chunk save handling is coordinated to avoid duplicate processing. This prevents deleted objects returning from omitted empty chunks; it does not repair existing duplicates.
+- An unrecognized Upgrade World save setup stops resets and bundle loading. Normal world saves, F8, building rules and save-only archives remain available. Resolve the mod combination and restart before retrying.
+- Manifest versions **2/3** and compressed bundle version **3** are supported. Older formats are not converted; re-save from the original live world when available.
+- ZoneSavior does not raise the game's terrain height limit. Old worlds with changes beyond that limit need a separate compatible height-limit mod on relevant clients.
 
-`ZoneBundles/<tag>/manifest.yml` records the archive shape. Each `bundleNNN_<generation>.zonebundle.yml.gz` stores one source zone as a compact, gzip-compressed YAML bundle. ZoneSavior reads and writes these files directly; no manual extraction is required. New bundle files are committed by replacing the manifest only after every zone is saved successfully.
+## Detailed guide
 
-Manifest versions 2 and 3 and compressed bundle payload version 3 are supported. Older formats, including uncompressed legacy zone bundles, are not loaded or converted. If the original world data is still available, create a new archive from the live world with the current ZoneSavior version before restoring it.
-
-`Diagnostics/` contains YAML reports written by `zs_debugzone`.
-
-## Config
-
-Config sections:
-
-- `01 - General`
-  - `Lock Configuration`: lets the server control synced settings.
-- `02 - ZoneSavior`
-  - `WearNTear Save Mode`: controls whether zone bundle saves include creatorless WearNTear.
-  - `Zone WearNTear Limit`: enables zone limits from `zones.yml`.
-  - `Zone UI Toggle Hotkey`: toggles the client zone overlay.
-  - `Build Counter Visible Seconds`: controls how long the placement counter stays visible.
-  - `Support Fill Contact Tolerance`: terrain contact capture tolerance. Source terrain must be loaded to capture exact contacts.
-  - `Zone Bundle Support Fill Feather Width`: blend width around restored support terrain.
-- `03 - Auto Archive`
-  - `Dry Run`: report only.
-  - `Reset After Save`: reset source zones whose creators are all eligible after saving. Connected mixed-owner zones are saved and kept.
-  - `Minimum Pieces Per Cluster`: counts only eligible owners' structures. Small mixed-owner clusters are skipped; small clusters containing only eligible owners retain reset-without-save behavior during reset runs.
-  - `Inactive Days`: owner inactivity threshold.
-  - `Scan Interval Minutes`: automatic scan interval. `0` disables scheduled scans.
-  - `Scanner Batch Size`: ZDOs inspected before yielding a frame.
-  - `Max Zones Per Run`: maximum number of zones reserved for work in one automatic scan. Failed save/reset attempts still consume this budget.
-
-## What Gets Archived
-
-ZoneSavior saves player-build structures, not arbitrary world clutter.
-
-Saved:
-
-- player-build WearNTear objects with normal build recipes/resource costs
-- tamed monsters with `MonsterAI` and `Tameable`
-- creator metadata when present
-- terrain support data for saved structures
-
-Skipped:
-
-- players, tombstones, loose item drops, projectiles, ragdolls, fish
-- location objects and volatile world objects
-- vanilla terrain comps and most raw terrain modifiers
-- WearNTear prefabs without normal build recipes/resource costs
-
-Auto archive candidate detection only starts from creator-linked WearNTear with `creator != 0`. `WearNTear Save Mode = IncludeCreatorless` can include nearby creatorless WearNTear during the save step, but creatorless structures alone do not make a zone eligible for inactive-owner cleanup.
-
-Automatic archives keep structures together across owner boundaries. Adjacent zones (including diagonals) containing only eligible creators form the reset core. Mixed-owner neighbors join the same archive when they share an eligible creator with a connected zone. This can continue across several mixed zones, but an active or protected creator alone cannot connect additional zones. A normal scan requires at least one core zone, so retained mixed zones do not create a fresh archive after the core has been reset. There is no separate aggressive mode.
-
-For adjacent zones `[A+B] [B+C] [C]`, with A/B eligible and C active, one tag saves both `[A+B]` and `[B+C]`. Only `[A+B]` is reset; `[B+C]` and `[C]` remain. The saved `[B+C]` snapshot contains all normally saved structures and tamed animals in that zone, including C's objects. Eligibility, recipe/save filters, minimum count and per-run limits still apply.
-
-Before and during a saved reset, the server rechecks the saved state of creator-owned objects and tamed animals. Added/changed objects, changed container payloads or unexplained disappearances stop the affected reset. Normal inactivity scans also recheck eligibility and stop on a reconnect; an explicit Steam ID remains an administrator override of owner inactivity/protection. Spawned-object chains cannot delete outside the reset zone. The manifest records intent immediately before mutation and records each successfully reset zone separately. A failed preflight leaves the zone intact; an interrupted reset after mutation leaves a pending marker and blocks loading that tag until the partial world state has been reviewed. This is a conservative stop, not an automatic rollback.
-
-## Empty Chunk Saves and Optional Mods
-
-On the host or dedicated server, ZoneSavior includes previously saved chunks that become completely empty in the game's next normal save. This prevents old objects from returning because an empty chunk was omitted. A save chunk spans 8×8 to 64×64 zones; resetting one zone does not necessarily empty a chunk. The patch preserves the game's dirty-state and save-failure handling and does not force an immediate save or repair existing duplicates.
-
-Upgrade World is optional. When its complete, recognized empty-chunk cleanup is active, ZoneSavior delegates to it instead of also writing empty replacement files. Recognition checks the active patches and the relevant implementation/shared state, not a fixed release number or whole-DLL hash. FreshWorld can also coexist: already scheduled replacements are not added or counted twice.
-
-An unknown or incomplete Upgrade World save contract disables reset scans and bundle loading/target replacement until restart after resolving the mod combination. Ordinary world saves, F8, build rules, queries, dry runs and save-only archives remain available. Checks run after initial plugin registration and at save/mutation boundaries; original implementation analysis is cached for the loaded assembly's lifetime. Runtime DLL replacement is unsupported.
-
-If compatibility changes during an operation, subsequent mutation batches stop and existing cleanup/failure reporting runs. Completed changes are not rolled back automatically; reset journals retain their pending state where applicable. An already dispatched client terrain request may finish before the host stops the next step. Existing support grace remains active for partially restored structures.
-
-## Terrain Restore
-
-ZoneSavior uses SupportFill terrain restore.
-
-When saving a loaded zone, it samples the lower footprint of saved structures and records terrain contacts where terrain is close enough to the structure bottom. When loading, those contacts can raise or cut terrain so structures regain support.
-
-New saves also record one lowest valid contact height per touching piece and the lowest non-positive height difference from the original, unmodified terrain. For relocation, the most frequent piece contact height band (0.25m bands; ties prefer the lower band) selects the representative floor. The bundle is aligned at the first contact between that floor and the destination's unmodified terrain, then the saved negative terrain offset is applied. A large piece receives one vote, just like a small piece. Contacts in overlapping height bands are retained for alignment; support terrain still uses the lowest contact in each cell. All zones loaded together share one placement height; `offset=Y` adds a further adjustment.
-
-Existing version 3 bundles remain readable. If any participating support zone lacks the new placement metadata, the entire load keeps its previous placement calculation; re-save the live structures to use the new rule. Original-location `restore` keeps the saved coordinates. The terrain's existing +/-8m limit still applies, so a different slope can leave some structures buried or unsupported.
-
-If exact contacts are missing, ZoneSavior falls back to saved collider/footprint data and places terrain near the lowest reasonable support plane. The fallback is clamped to avoid extreme spikes.
-
-## Terrain Editing and Blueprints
-
-ZoneSavior no longer provides terrain proxy prefabs or replays terrain operations. Use Infinity Hammer to edit and save the final terrain snapshot in a blueprint, and Expand World Data to place that blueprint as a location. InfinityHammerAddon is a separate client-side addon for Infinity Hammer's existing tools; it does not depend on ZoneSavior or create saved terrain proxy objects.
-
-This is a breaking removal, without legacy aliases, replay support, or automatic world cleanup. Preserve an external backup of existing worlds and blueprints before upgrading. While the previous ZoneSavior version is still installed, capture the final terrain with Infinity Hammer and remove the old ZoneSavior proxy entries from replacement blueprints. ZoneSavior does not migrate or clean up old proxy data; the game itself may discard unknown-prefab ZDOs when those areas load.
-
-ZoneSavior also no longer increases the game's terrain height limit. Previously saved changes beyond the game's normal limit can look different unless every relevant client uses a compatible separate height-limit mod. Saving a terrain snapshot does not remove that requirement.
-
-Zone bundle SupportFill terrain restoration remains part of ZoneSavior and is independent of blueprint terrain snapshots.
-
-## Commands
-
-### `zs_savezone`
-
-Save one source zone or a rectangular source range.
-
-```text
-zs_savezone (x,z) tag
-zs_savezone (x~x,z~z) tag
-```
-
-Examples:
-
-```text
-zs_savezone (-21,-4) test_base
-zs_savezone (-21~-20,-4) old_base
-```
-
-A manual save command accepts at most 1,024 zones. `zs_savezone` does not accept a target or vertical offset.
-
-### `zs_loadzone`
-
-Load a saved tag.
-
-```text
-zs_loadzone tag [to (x,z)] [offset=Y]
-zs_loadzone tag restore
-zs_loadzone tag source (x,z) [to (x,z)] [offset=Y]
-```
-
-Examples:
-
-```text
-zs_loadzone auto_halla_c178 restore
-zs_loadzone auto_halla_c178 to (-4,0)
-zs_loadzone auto_halla_c178 source (-21,-4) to (10,3)
-zs_loadzone test_base to (10,3) offset=2
-```
-
-Notes:
-
-- Without `source`, ZoneSavior loads every bundle in the tag manifest and preserves the saved shape.
-- `source (x,z)` loads only one saved source zone from the manifest.
-- `restore` loads manual and older archives back to all saved source zones. For new automatic reset archives it restores only zones recorded as successfully reset, leaving saved-only mixed zones intact. For new automatic save-only archives it restores only the eligible core zones.
-- `to (x,z)` is the target anchor.
-- If `to (x,z)` is omitted, ZoneSavior uses the local player's current zone.
-- `offset=Y` adds a vertical offset after the support anchor is calculated.
-- `restore` does not accept `to (x,z)` or an offset.
-- Relocating a new automatic archive still loads the whole saved shape, including mixed zones and their other owners' objects. It is a copy: the retained source zones remain. Choose the destination with that in mind, especially for containers and tamed animals. Loading onto a retained source zone in the same world is rejected, including single-source loads; world identity uses the world UID.
-- New automatic archives reject clearing a target when its Spawned-object chain extends outside the complete load target set. Normal structural stability and terrain effects at a zone edge still require in-game verification.
-
-### `zs_scan`
-
-Run the inactive-player archive scanner manually.
-
-```text
-zs_scan [steamID] [dry|save|reset]
-```
-
-Examples:
-
-```text
-zs_scan dry
-zs_scan save
-zs_scan reset
-zs_scan 76561198000000000 dry
-zs_scan steam:76561198000000000 reset
-```
-
-Modes:
-
-- `dry`: report candidates only.
-- `save`: save matching archives but do not reset.
-- `reset`: save matching archives and reset eligible source zones.
-
-Without a Steam ID, inactive days, archive protection, minimum cluster size, and auto archive config apply. With a Steam ID, the scan is an admin override for that owner; mixed-owner zones are protected from targeted reset.
-
-### `zs_status`
-
-Write a YAML report with recent auto archive runs.
-
-```text
-zs_status
-```
-
-The console prints a short summary and the generated report path.
-
-Cluster records distinguish `zones` (saved scope), `resetZones` (planned reset scope), `backupOnlyZones`, `resetCompletedZones` and `resetSkippedZones`. `zs_scan dry` reports the planned save/reset/keep counts without changing the world.
-
-### `zs_debugzone`
-
-Write a YAML diagnostic report explaining one zone's auto archive eligibility.
-
-```text
-zs_debugzone (x,z)
-```
-
-Example:
-
-```text
-zs_debugzone (-7,12)
-```
-
-Reports are written under `BepInEx/config/ZoneSavior/Diagnostics/`.
-
-The zone report distinguishes a reset candidate (`wouldBeCandidateZone`) from a possible saved-only neighbor (`mayBeBackupOnlyZone`). A single-zone report cannot establish the connecting cluster; use `zs_scan dry` for that decision.
-
-## Common Workflows
-
-Test one save/load:
-
-```text
-zs_savezone (-21,-4) test_base
-zs_loadzone test_base to (10,3)
-```
-
-Dry-run inactive cleanup:
-
-```text
-zs_scan dry
-zs_status
-```
-
-Save inactive clusters without reset:
-
-```text
-zs_scan save
-zs_status
-```
-
-Save and reset inactive clusters:
-
-```text
-zs_scan reset
-```
-
-Restore an archive elsewhere:
-
-```text
-zs_loadzone auto_halla_c178 to (20,-3)
-```
-
-Restore an archive to its original zones:
-
-```text
-zs_loadzone auto_halla_c178 restore
-```
-
-## Github
-https://github.com/sighsorry1029/ZoneSavior
+See [Commands and configuration](https://github.com/sighsorry1029/ZoneSavior/blob/main/docs/ZoneSaviorCommands.md) for ranges, targeted scans, protection rules, restore behavior, terrain placement and translation overrides.

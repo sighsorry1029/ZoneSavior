@@ -1,8 +1,11 @@
 <Project>
     <PropertyGroup>
         <ValheimGamePath>C:\Program Files (x86)\Steam\steamapps\common\Valheim</ValheimGamePath>
+        <!-- Compile against the verified 1.0.30 originals independently of the local game's
+             installed version. Override ValheimReferencePath to use another 1.0.30 install. -->
+        <ValheimReferencePath Condition="'$(ValheimReferencePath)' == ''">$(USERPROFILE)\.codex\references\valheim\snapshots\client-b26870846-windows-x64-20261125T102540Z\original</ValheimReferencePath>
         <BepInExPath>$(ValheimGamePath)\BepInEx</BepInExPath>
-        <CorlibPath>$(ValheimGamePath)\valheim_Data\Managed</CorlibPath>
+        <CorlibPath Condition="'$(CorlibPath)' == ''">$(ValheimReferencePath)\valheim_Data\Managed</CorlibPath>
         <CopyOutputDLLPath>$(ValheimGamePath)\BepInEx\plugins</CopyOutputDLLPath> <!-- This is where the output DLL will be copied to after building. The project supports doing this for up to three locations. Duplicate this line and append a number. Example below -->
         <!--<CopyOutputDLLPath2>$(ValheimGamePath)\BepInEx\plugins</CopyOutputDLLPath2>-->
         <!--<CopyOutputDLLPath3>$(ValheimGamePath)\BepInEx\plugins</CopyOutputDLLPath3>-->
