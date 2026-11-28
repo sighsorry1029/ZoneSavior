@@ -44,6 +44,7 @@ Automatic scans are **off by default**. To schedule them, set `Scan Interval Min
 Connected mixed-owner zones are saved so buildings crossing a boundary stay together, but active players' zones are kept. For `[A+B] [B+C] [C]`, with A/B inactive and C active, the first two zones are archived and only `[A+B]` is reset.
 
 - Original-location restore of an automatic reset archive restores only zones recorded as reset.
+- If a supported building or tamed animal is missing from the bundle, `WarnAndContinue` (default) allows the reset. That bundle cannot restore the missing object or its contents. Choose `Missing Bundle Entry Policy = BlockReset` to keep the entire cluster. In both modes, the server log points to a per-scan YAML report in `ZoneSavior/Diagnostics/` with the affected prefabs and counts.
 - Relocating loads the whole saved archive, including mixed-zone containers and animals. Retained source objects remain, so relocation creates copies.
 - During reset runs, fully eligible clusters below `Minimum Pieces Per Cluster` are **reset without an archive**. Small mixed-owner clusters are skipped.
 - An interrupted reset can block loading that archive until its partial state is reviewed. There is no automatic rollback.

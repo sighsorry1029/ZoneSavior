@@ -1805,6 +1805,11 @@ internal static partial class ZoneBundleCommands
         {
             try
             {
+                if (canCaptureObject != null && processedSinceYield == 0)
+                {
+                    EnsureAutoArchiveClassificationReady();
+                }
+
                 if (TryCreateBundleEntry(
                         zdo,
                         zone,
@@ -1812,6 +1817,7 @@ internal static partial class ZoneBundleCommands
                         sourceAnchor,
                         useRelativePlacement,
                         creatorNames,
+                        canCaptureObject != null,
                         ref monsterCount,
                         out ZoneBundleEntry entry))
                 {
@@ -1860,33 +1866,82 @@ internal static partial class ZoneBundleCommands
         }
     }
 
-    internal static string GetAutoArchiveResetFingerprint(ZDO zdo)
+    internal static void EnsureAutoArchiveClassificationReady()
     {
-        if (zdo == null || !zdo.IsValid() || ZNetScene.instance == null ||
-            !TryClassify(zdo, out SaveEntryKind kind, out GameObject prefab))
+        ZNetScene scene = ZNetScene.instance;
+        if (!scene || scene.m_prefabs == null || scene.m_prefabs.Count == 0)
         {
-            throw new InvalidOperationException("Cannot verify an unavailable or unsupported auto-archive object before reset.");
+            throw new InvalidOperationException("The network prefab registry is not ready for an archive reset.");
         }
 
-        bool wearNTear = prefab.GetComponent<WearNTear>() != null;
-        Vector2i zone = ZoneSaviorZones.GetZone(zdo.GetPosition());
-        if ((wearNTear && !ZoneSaviorBuildRecipeRules.HasBuildRecipe(prefab)) ||
-            (!ZoneBundleTerrain.IsSupportWearNTear(zdo, zone, prefab) && kind != SaveEntryKind.Monster))
+        // ZNetScene.Awake publishes its singleton before indexing the declared network prefabs.
+        // An incomplete registry cannot establish that an individual prefab is genuinely missing.
+        foreach (GameObject declared in scene.m_prefabs)
         {
-            throw new InvalidOperationException("Auto-archive object is excluded by the bundle save policy; reset would lose its data.");
+            if (!declared || !scene.GetPrefab(scene.GetPrefabHash(declared)))
+            {
+                throw new InvalidOperationException("The network prefab registry is incomplete; cannot classify objects for reset.");
+            }
         }
 
-        // Copy the live maps before sanitizing. GetBase64 sorts the typed dictionary
-        // keys, so insertion order and volatile runtime state cannot change the result.
+        ZoneSaviorBuildRecipeRules.RefreshForArchiveReset();
+    }
+
+    internal static bool TryGetAutoArchiveResetFingerprint(ZDO zdo, Vector2i zone, out string fingerprint,
+        out string prefabName, out string exclusionReason, bool includeFingerprint = true)
+    {
+        fingerprint = "";
+        exclusionReason = GetBundleExclusion(zdo, zone, true, out SaveEntryKind kind, out GameObject prefab, out bool wearNTear);
+        if (exclusionReason.Length != 0)
+        {
+            prefabName = prefab ? Utils.GetPrefabName(prefab) : $"hash {zdo.GetPrefab()}";
+            return false;
+        }
+        prefabName = Utils.GetPrefabName(prefab);
+        if (!includeFingerprint) return true;
+
+        // Compare full-precision transforms and independently copied, sanitized bundle values.
         DataEntry data = new(zdo);
         SanitizeForSave(kind, data, wearNTear);
-        ZPackage fingerprint = new();
-        fingerprint.Write(zdo.GetPrefab());
-        fingerprint.Write(zdo.GetPosition());
-        fingerprint.Write(zdo.GetRotation());
-        fingerprint.Write(ReadScale(zdo, prefab));
-        fingerprint.Write(data.GetBase64());
-        return fingerprint.GetBase64();
+        ZPackage package = new();
+        package.Write(zdo.GetPrefab());
+        package.Write(zdo.GetPosition());
+        package.Write(zdo.GetRotation());
+        package.Write(ReadScale(zdo, prefab));
+        package.Write(data.GetBase64());
+        fingerprint = package.GetBase64();
+        return true;
+    }
+
+    private static string GetBundleExclusion(ZDO zdo, Vector2i zone, bool forReset,
+        out SaveEntryKind kind, out GameObject prefab, out bool wearNTear)
+    {
+        kind = SaveEntryKind.Static;
+        prefab = null!;
+        wearNTear = false;
+        if (zdo == null || !zdo.IsValid())
+        {
+            if (forReset) throw new InvalidOperationException($"An object in {zone} became unavailable during archive classification.");
+            return "invalid ZDO";
+        }
+        if (forReset && ZoneSaviorZones.GetZone(zdo.GetPosition()) != zone)
+        {
+            throw new InvalidOperationException($"Object {zdo.m_uid} moved out of {zone} during archive classification.");
+        }
+        if (!TryClassify(zdo, out kind, out prefab))
+        {
+            if (prefab) return "object type excluded by bundle policy";
+            if (forReset && ZNetScene.instance.HasPrefab(zdo.GetPrefab()))
+            {
+                throw new InvalidOperationException($"Registered prefab {zdo.GetPrefab()} has no valid object.");
+            }
+            return "unregistered prefab";
+        }
+
+        wearNTear = prefab.GetComponent<WearNTear>() != null;
+        if (wearNTear && !ZoneSaviorBuildRecipeRules.HasBuildRecipe(prefab)) return "no eligible build recipe";
+        if (kind == SaveEntryKind.Monster || ZoneBundleTerrain.IsSupportWearNTear(zdo, zone, prefab)) return "";
+        return wearNTear ? "WearNTear excluded by save mode" : "not WearNTear or a supported tamed animal";
     }
 
     private static bool TryCreateBundleEntry(
@@ -1896,32 +1951,18 @@ internal static partial class ZoneBundleCommands
         ZoneBundleTerrain.TerrainSourceAnchor sourceAnchor,
         bool useRelativePlacement,
         Dictionary<long, string> creatorNames,
+        bool forReset,
         ref int monsterCount,
         out ZoneBundleEntry entry)
     {
         entry = null!;
-        if (zdo == null || !zdo.IsValid())
+        string exclusion = GetBundleExclusion(zdo, zone, forReset, out SaveEntryKind kind, out GameObject prefab, out bool wearNTear);
+        if (wearNTear)
         {
-            return false;
+            AddCreatorPlayer(creatorNames, zdo.GetLong(ZDOVars.s_creator, 0L), zdo.GetString(ZDOVars.s_creatorName, ""));
         }
 
-        if (!TryClassify(zdo, out SaveEntryKind kind, out GameObject prefab))
-        {
-            return false;
-        }
-
-        bool wearNTear = prefab.GetComponent<WearNTear>() != null;
-        bool tamedMonster = kind == SaveEntryKind.Monster;
-        long creatorPlayerId = wearNTear ? zdo.GetLong(ZDOVars.s_creator, 0L) : 0L;
-        string creatorName = wearNTear ? zdo.GetString(ZDOVars.s_creatorName, "") : "";
-        AddCreatorPlayer(creatorNames, creatorPlayerId, creatorName);
-
-        if (wearNTear && !ZoneSaviorBuildRecipeRules.HasBuildRecipe(prefab))
-        {
-            return false;
-        }
-
-        if (!ZoneBundleTerrain.IsSupportWearNTear(zdo, zone, prefab) && !tamedMonster)
+        if (exclusion.Length != 0)
         {
             return false;
         }

@@ -86,6 +86,34 @@ internal sealed class AutoArchiveStatusReport
     public List<ArchiveRunRecord> Runs { get; set; } = [];
 }
 
+internal sealed class ArchiveCoverageReport
+{
+    public int Version { get; set; } = 1;
+    public string RunId { get; set; } = "";
+    public List<ArchiveCoverageCluster> Clusters { get; set; } = [];
+}
+
+internal sealed class ArchiveCoverageCluster
+{
+    public string Tag { get; set; } = "";
+    public string Policy { get; set; } = "";
+    public bool Preview { get; set; }
+    public bool ResetBlocked { get; set; }
+    public List<ArchiveCoverageEntry> Entries { get; set; } = [];
+}
+
+internal sealed class ArchiveCoverageEntry
+{
+    public int X { get; set; }
+    public int Z { get; set; }
+    public string Prefab { get; set; } = "";
+    public int PrefabHash { get; set; }
+    public string Kind { get; set; } = "";
+    public string Reason { get; set; } = "";
+    public int Count { get; set; }
+    public List<string> SampleZdoIds { get; set; } = [];
+}
+
 internal sealed class ArchiveClusterRecord
 {
     public string Tag { get; set; } = "";

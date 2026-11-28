@@ -134,11 +134,18 @@ internal static class ZoneBundleConfig
     }
 }
 
+internal enum AutoArchiveMissingBundleEntryPolicy
+{
+    WarnAndContinue = 0,
+    BlockReset = 1
+}
+
 internal static class AutoArchiveConfig
 {
     private static ConfigEntry<int> _inactiveDays = null!;
     private static ConfigEntry<ZoneSaviorPlugin.Toggle> _dryRun = null!;
     private static ConfigEntry<ZoneSaviorPlugin.Toggle> _resetAfterSave = null!;
+    private static ConfigEntry<AutoArchiveMissingBundleEntryPolicy> _missingBundleEntryPolicy = null!;
     private static ConfigEntry<int> _minimumPiecesPerCluster = null!;
     private static ConfigEntry<int> _maxZonesPerRun = null!;
     private static ConfigEntry<int> _scanIntervalMinutes = null!;
@@ -148,6 +155,7 @@ internal static class AutoArchiveConfig
     public static int InactiveDays => Mathf.Clamp(_inactiveDays.Value, 0, 3650);
     public static bool DryRun => _dryRun.Value == ZoneSaviorPlugin.Toggle.On;
     public static bool ResetAfterSave => _resetAfterSave.Value == ZoneSaviorPlugin.Toggle.On;
+    public static AutoArchiveMissingBundleEntryPolicy MissingBundleEntryPolicy => _missingBundleEntryPolicy.Value;
     public static int MinimumPiecesPerCluster => Mathf.Clamp(_minimumPiecesPerCluster.Value, 1, 10000);
     public static int MaxZonesPerRun => Mathf.Clamp(_maxZonesPerRun.Value, 1, 10000);
     public static int ScanIntervalMinutes => Mathf.Clamp(_scanIntervalMinutes.Value, 0, 525600);
@@ -165,6 +173,13 @@ internal static class AutoArchiveConfig
             "Reset After Save",
             ZoneSaviorPlugin.Toggle.Off,
             ConfigDescriptions.Ordered("If on, saved zones whose creators are all archive-eligible are reset. Connected mixed-owner zones are included in the same archive and kept in the world.", 690));
+        _missingBundleEntryPolicy = plugin.config(
+            ConfigSections.AutoArchive,
+            "Missing Bundle Entry Policy",
+            AutoArchiveMissingBundleEntryPolicy.WarnAndContinue,
+            ConfigDescriptions.Ordered(
+                "If a supported structure or tamed animal is missing from the bundle, log its prefab. WarnAndContinue allows the reset to proceed. BlockReset keeps all zones in that cluster. An omitted object cannot be restored from that bundle.",
+                685));
         _minimumPiecesPerCluster = plugin.config(
             ConfigSections.AutoArchive,
             "Minimum Pieces Per Cluster",

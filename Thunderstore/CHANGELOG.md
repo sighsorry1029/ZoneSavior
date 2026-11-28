@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.5
+
+- Automatic save-and-reset scans can now clear an eligible zone containing player-planted crops or an individual unregistered prefab. Objects excluded by the bundle policy are not backed up and cannot be restored from that bundle.
+- Add the server setting `Missing Bundle Entry Policy` under `03 - Auto Archive`. The default, `WarnAndContinue`, logs missing supported buildings or tamed animals and allows the reset if the other safety checks pass. An omitted chest and its contents cannot be recovered from that archive. Choose `BlockReset` to keep the entire cluster if any reset zone is missing a required entry.
+- Both modes log missing prefab names, hashes and counts. Scans with findings write a YAML report under `BepInEx/config/ZoneSavior/Diagnostics/` with separate groups for missing entries and policy exclusions. Dry runs preview exclusions. A save-and-reset run writes the report before clearing the affected cluster.
+- Reset checks now cover creatorless structures when the save settings include them. Registry readiness, storage errors, changes to tracked objects and owner eligibility are checked independently of the missing-entry setting.
+
 ## 1.3.4
 
 - Update for Valheim 1.0.30 using original game assemblies. Adapt bundle capture to the new indexed ZDO data collections while keeping independent snapshots of all typed values and item-content byte buffers. Existing bundle formats, destination ownership and restore policies are preserved.

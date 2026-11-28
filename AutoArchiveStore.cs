@@ -37,6 +37,15 @@ internal static class AutoArchiveStore
     public static string FilePath => Path.Combine(ZoneSaviorPlugin.DataStorageFullPath, ZoneSaviorPlugin.ActivityFileName);
     public static AutoArchiveState State { get; private set; } = new();
 
+    internal static string WriteCoverageReport(string runId, string reportKey, List<ArchiveCoverageCluster> clusters)
+    {
+        string filename = ZoneSaviorPaths.SanitizePathSegment($"archive-coverage_{runId}_{reportKey}.yml");
+        string path = Path.Combine(ZoneSaviorPlugin.DataStorageFullPath, "Diagnostics", filename);
+        ArchiveCoverageReport report = new() { RunId = runId, Clusters = clusters };
+        ZoneSaviorFiles.WriteAllTextAtomic(path, ZoneBundleSerialization.Serialize(report));
+        return path;
+    }
+
     public static void Initialize(ManualLogSource logger)
     {
         if (_initialized)

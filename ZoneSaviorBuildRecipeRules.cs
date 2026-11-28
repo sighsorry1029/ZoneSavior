@@ -22,6 +22,17 @@ internal static class ZoneSaviorBuildRecipeRules
         }
     }
 
+    internal static void RefreshForArchiveReset()
+    {
+        // Mods can change a piece table without changing the number of items in ObjectDB.
+        // Rebuild at the snapshot boundary so a previously excluded piece can become required.
+        RefreshIndex();
+        if (BuildRecipePrefabs.Count == 0)
+        {
+            throw new InvalidOperationException("The player build recipe index is not ready for an archive reset.");
+        }
+    }
+
     internal static bool HasBuildRecipe(GameObject? prefab)
     {
         if (!prefab)

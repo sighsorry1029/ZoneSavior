@@ -73,6 +73,8 @@ internal static class AutoArchiveScanner
         run.CandidateZones = plans.Sum(plan => plan.Zones.Count);
         int processedZones = 0;
         int clusterIndex = 0;
+        List<ArchiveCoverageCluster> coverageReports = [];
+        string reportKey = Guid.NewGuid().ToString("N");
 
         foreach (AutoArchivePlan plan in plans)
         {
@@ -155,40 +157,70 @@ internal static class AutoArchiveScanner
             }
 
             record.Tag = ZoneBundleCommands.MakeUniqueAutoArchiveTag(BuildTag(clusterIndex, cluster, zoneInfos, eligibleCreators));
+            Dictionary<Vector2i, ResetZoneSnapshot> resetSnapshots = [];
+            if (options.DryRun || options.ResetAfterSave)
+            {
+                try
+                {
+                    foreach (Vector2i zone in plan.ResetZones)
+                        resetSnapshots.Add(zone, CaptureResetObjects(zone, preview: options.DryRun));
+                }
+                catch (Exception ex)
+                {
+                    record.Status = "skipped";
+                    record.Reason = $"Could not verify reset objects: {ex.Message}";
+                    _logger.LogWarning(record.Reason);
+                    run.Clusters.Add(record);
+                    continue;
+                }
+            }
+            bool ReviewCoverage(bool preview)
+            {
+                var policy = AutoArchiveConfig.MissingBundleEntryPolicy;
+                ArchiveCoverageCluster coverage = new() { Tag = record.Tag, Policy = policy.ToString(), Preview = preview };
+                bool proceed = CheckArchiveCoverage(resetSnapshots, policy, coverage);
+                if (coverage.Entries.Count == 0) return true;
+
+                coverageReports.Add(coverage);
+                foreach (var missing in coverage.Entries.Where(row => row.Kind == "missing")
+                             .GroupBy(row => (row.Prefab, row.PrefabHash)))
+                    _logger.LogWarning($"{record.Tag}: missing bundle entry for {missing.Key.Prefab} " +
+                        $"(hash {missing.Key.PrefabHash}), count {missing.Sum(row => row.Count)}, policy {policy}.");
+                string summary = $"{record.Tag}: " +
+                    $"{coverage.Entries.Where(row => row.Kind == "missing").Sum(row => row.Count)} missing supported, " +
+                    $"{coverage.Entries.Where(row => row.Kind == "excluded").Sum(row => row.Count)} policy-excluded";
+                try
+                {
+                    string path = AutoArchiveStore.WriteCoverageReport(run.RunId, reportKey, coverageReports);
+                    string message = $"{summary} ({(preview ? "preview" : policy.ToString())}). Report: {path}";
+                    run.Messages.Add(message);
+                    _logger.LogWarning(message);
+                }
+                catch (Exception ex)
+                {
+                    record.Reason = $"{summary}; could not write coverage report: {ex.Message}";
+                    _logger.LogError(record.Reason);
+                    return false;
+                }
+                if (!proceed) record.Reason = $"{summary}; BlockReset kept all reset zones in the cluster.";
+                return proceed;
+            }
             if (options.DryRun)
             {
                 record.Status = "dry-run";
                 record.Reason = $"Would save {cluster.Count} zone(s), keep {record.BackupOnlyZones.Count} mixed-owner zone(s), " +
                     $"and reset {(options.ResetAfterSave ? plan.ResetZones.Count : 0)} zone(s); dry run is enabled.";
+                ReviewCoverage(preview: true);
                 run.Clusters.Add(record);
                 continue;
             }
-
             ZoneBundleArchiveResult? saveResult = null;
-            Dictionary<Vector2i, Dictionary<ZDOID, string>> resetSnapshots = [];
-            Exception? snapshotError = null;
-            if (options.ResetAfterSave)
-            {
-                try { resetSnapshots = plan.ResetZones.ToDictionary(zone => zone, CaptureResetObjects); }
-                catch (Exception ex) { snapshotError = ex; }
-            }
-            if (snapshotError != null)
-            {
-                record.Status = "skipped";
-                record.Reason = $"Could not verify all player-owned reset objects: {snapshotError.Message}";
-                run.Clusters.Add(record);
-                continue;
-            }
-            Dictionary<Vector2i, HashSet<ZDOID>> capturedIds = plan.ResetZones
-                .ToDictionary(zone => zone, _ => new HashSet<ZDOID>());
             bool VerifyCapturedObject(Vector2i zone, ZDO zdo)
             {
-                if (!options.ResetAfterSave || !resetSnapshots.TryGetValue(zone, out Dictionary<ZDOID, string> snapshot) ||
-                    (zdo.GetLong(ZDOVars.s_creator, 0L) == 0L && !zdo.GetBool(ZDOVars.s_tamed, false))) return true;
-                if (!snapshot.TryGetValue(zdo.m_uid, out string expected) ||
-                    expected != ZoneBundleCommands.GetAutoArchiveResetFingerprint(zdo)) return false;
-                capturedIds[zone].Add(zdo.m_uid);
-                return true;
+                if (!resetSnapshots.TryGetValue(zone, out var snapshot)) return true;
+                return snapshot.RequiredPrefabs.ContainsKey(zdo.m_uid) &&
+                    ZoneBundleCommands.TryGetAutoArchiveResetFingerprint(zdo, zone, out string current, out _, out _) &&
+                    snapshot.Fingerprints[zdo.m_uid] == current && snapshot.CapturedIds.Add(zdo.m_uid);
             }
             yield return ZoneBundleCommands.SaveZonesAsync(cluster, record.Tag, result => saveResult = result,
                 resetEligibleZones: plan.ResetZones.Count > 0 ? plan.ResetZones : null,
@@ -219,7 +251,13 @@ internal static class AutoArchiveScanner
 
             if (options.ResetAfterSave)
             {
-                yield return ResetSavedZones(plan, record, zoneInfos, eligibleCreators, targetPlayerIds, resetSnapshots, capturedIds);
+                if (ReviewCoverage(preview: false))
+                    yield return ResetSavedZones(plan, record, zoneInfos, eligibleCreators, targetPlayerIds, resetSnapshots);
+                else
+                {
+                    record.Status = "saved-reset-skipped";
+                    record.ResetSkippedZones.AddRange(plan.ResetZones.Select(ZoneSaviorZones.ToModel));
+                }
             }
 
             run.Clusters.Add(record);
@@ -236,8 +274,7 @@ internal static class AutoArchiveScanner
         Dictionary<Vector2i, AutoArchiveZoneInfo> zoneInfos,
         HashSet<long> eligibleCreators,
         HashSet<long> targetPlayerIds,
-        Dictionary<Vector2i, Dictionary<ZDOID, string>> snapshots,
-        Dictionary<Vector2i, HashSet<ZDOID>> capturedIds)
+        Dictionary<Vector2i, ResetZoneSnapshot> snapshots)
     {
         List<string> messages = [];
         foreach (Vector2i zone in plan.ResetZones)
@@ -249,15 +286,11 @@ internal static class AutoArchiveScanner
             {
                 try
                 {
-                    if (snapshots[zone].Keys.Any(id => !capturedIds[zone].Contains(id)))
-                    {
-                        reason = "Not all player-owned objects were captured in the archive";
-                        return false;
-                    }
                     if (targetPlayerIds.Count == 0 &&
                         !AllCreatorsEligible(zoneInfos[zone].Creators, DateTime.UtcNow, out reason)) return false;
                     if (!CanResetZone(zone, eligibleCreators, targetPlayerIds, out reason)) return false;
-                    return ResetSnapshotMatches(snapshots[zone], CaptureResetObjects(zone), destroyedIds, out reason);
+                    return ResetSnapshotMatches(snapshots[zone].Fingerprints,
+                        CaptureResetObjects(zone, recheck: true).Fingerprints, destroyedIds, out reason);
                 }
                 catch (Exception ex)
                 {
@@ -354,17 +387,80 @@ internal static class AutoArchiveScanner
         return targetPlayerIds.Count > 0 || AllCreatorsEligible(creators, DateTime.UtcNow, out reason);
     }
 
-    private static Dictionary<ZDOID, string> CaptureResetObjects(Vector2i zone)
+    internal sealed class ResetZoneSnapshot
     {
+        internal Dictionary<ZDOID, string> Fingerprints { get; } = [];
+        internal Dictionary<ZDOID, ArchiveCoverageEntry> RequiredPrefabs { get; } = [];
+        internal Dictionary<ZDOID, ArchiveCoverageEntry> ExcludedPrefabs { get; } = [];
+        internal HashSet<ZDOID> CapturedIds { get; } = [];
+    }
+
+    private static ResetZoneSnapshot CaptureResetObjects(Vector2i zone, bool preview = false, bool recheck = false)
+    {
+        ZoneBundleCommands.EnsureAutoArchiveClassificationReady();
         List<ZDO> objects = [];
         ZoneSaviorZones.FindObjects(zone, objects);
-        Dictionary<ZDOID, string> snapshot = [];
+        ResetZoneSnapshot snapshot = new();
+        bool includeCreatorless = ZoneBundleConfig.WearNTearSaveMode == ZoneBundleWearNTearSaveMode.IncludeCreatorless;
         foreach (ZDO zdo in objects)
         {
-            if (zdo.IsValid() && (zdo.GetLong(ZDOVars.s_creator, 0L) != 0L || zdo.GetBool(ZDOVars.s_tamed, false)))
-                snapshot[zdo.m_uid] = ZoneBundleCommands.GetAutoArchiveResetFingerprint(zdo);
+            if (!zdo.IsValid()) throw new InvalidOperationException($"An invalid ZDO was found in zone {zone}.");
+            long creator = zdo.GetLong(ZDOVars.s_creator, 0L);
+            bool tamed = zdo.GetBool(ZDOVars.s_tamed, false);
+            bool tracked = creator != 0L || tamed;
+            if (!tracked && !includeCreatorless) continue;
+            bool required = ZoneBundleCommands.TryGetAutoArchiveResetFingerprint(zdo, zone, out string fingerprint,
+                out string prefab, out string reason, includeFingerprint: !preview);
+            if (!required && !tracked) continue;
+
+            int hash = zdo.GetPrefab();
+            if (!preview)
+            {
+                // Exclusions still participate in change/ownership checks. ':' cannot occur in a base64 fingerprint.
+                snapshot.Fingerprints.Add(zdo.m_uid, required ? fingerprint : $"excluded:{hash}:{creator}:{tamed}:{reason}:{prefab}");
+            }
+            if (!recheck && (!preview || !required))
+            {
+                var labels = required ? snapshot.RequiredPrefabs : snapshot.ExcludedPrefabs;
+                labels.Add(zdo.m_uid, new ArchiveCoverageEntry { Prefab = prefab, PrefabHash = hash, Reason = reason });
+            }
         }
         return snapshot;
+    }
+
+    internal static bool CheckArchiveCoverage(Dictionary<Vector2i, ResetZoneSnapshot> snapshots,
+        AutoArchiveMissingBundleEntryPolicy policy, ArchiveCoverageCluster report)
+    {
+        bool missingSupported = false;
+        foreach (var zone in snapshots.OrderBy(pair => pair.Key.x).ThenBy(pair => pair.Key.y))
+        {
+            ResetZoneSnapshot snapshot = zone.Value;
+            if (!report.Preview)
+            {
+                var missing = snapshot.RequiredPrefabs.Where(pair => !snapshot.CapturedIds.Contains(pair.Key));
+                AddGroups(missing, zone.Key, "missing");
+            }
+            AddGroups(snapshot.ExcludedPrefabs, zone.Key, "excluded");
+        }
+        report.ResetBlocked = missingSupported && policy != AutoArchiveMissingBundleEntryPolicy.WarnAndContinue;
+        return !report.ResetBlocked;
+
+        void AddGroups(IEnumerable<KeyValuePair<ZDOID, ArchiveCoverageEntry>> entries, Vector2i zone, string kind)
+        {
+            var groups = entries.GroupBy(pair => (pair.Value.Prefab, pair.Value.PrefabHash, pair.Value.Reason));
+            foreach (var group in groups.OrderBy(g => g.Key.Prefab, StringComparer.Ordinal)
+                         .ThenBy(g => g.Key.PrefabHash).ThenBy(g => g.Key.Reason, StringComparer.Ordinal))
+            {
+                if (kind == "missing") missingSupported = true;
+                report.Entries.Add(new ArchiveCoverageEntry
+                {
+                    X = zone.x, Z = zone.y, Kind = kind, Prefab = group.Key.Prefab, PrefabHash = group.Key.PrefabHash,
+                    Reason = kind == "missing" ? "planned for archive but no bundle entry was captured" : group.Key.Reason,
+                    Count = group.Count(),
+                    SampleZdoIds = group.Select(pair => pair.Key).OrderBy(id => id).Take(3).Select(id => id.ToString()).ToList()
+                });
+            }
+        }
     }
 
     private static bool ResetSnapshotMatches(

@@ -138,6 +138,12 @@ For `[A+B] [B+C] [C]`, where A/B are eligible and C is active, the first two zon
 
 **Small-cluster exception:** during reset runs, a cluster containing only eligible owners and fewer than `Minimum Pieces Per Cluster` structures is reset **without being saved**. Small mixed-owner clusters are skipped. The minimum counts only eligible owners' structures. Explicit Steam ID scans bypass this threshold.
 
+Before the first deletion in a save-and-reset run, ZoneSavior checks whether it captured each supported structure and tamed animal planned for the reset zones. If an object is still present and unchanged but its bundle entry is missing, both policies log the missing prefab and count on the server. `WarnAndContinue` allows the reset. `BlockReset` keeps the entire cluster. An omitted object and its contents cannot be restored from that bundle.
+
+ZoneSavior also summarizes objects excluded by the save rules, such as player-planted saplings and individual prefab hashes absent from a ready registry. These exclusions alone allow the reset under either policy. If the registry is unavailable, serialization fails, or a bundle or manifest cannot be written, the cluster is kept.
+
+When a scan finds exclusions or missing entries, the ZoneSavior server log gives the totals and the path to `BepInEx/config/ZoneSavior/Diagnostics/archive-coverage_<runId>_<key>.yml`. It also lists each missing supported prefab with its hash and count. Each scan uses one file for its clusters. A dry run lists planned exclusions. A save-and-reset run writes its findings before the first deletion in each affected cluster. If the report cannot be written, that cluster is kept. For each zone and prefab, the report gives the name when available, numeric hash, reason, count and up to three sample ZDO IDs. A named sapling and an unregistered hash in the same zone appear as separate entries.
+
 Before and during a saved reset, changed objects, changed container contents or unexplained disappearances stop the affected reset. Normal scans also recheck eligibility and stop when an eligible owner reconnects. Destruction chains cannot leave the reset zone.
 
 A failed preflight leaves the zone intact. Once mutation has started, interruption can leave a partially reset world and a pending marker in the manifest. Loading that tag remains blocked until the partial state has been reviewed. Completed changes are not automatically rolled back.
@@ -164,6 +170,7 @@ F8 starts hidden after login. Its outline has eight 64m corner extensions, with 
 | --- | --- | --- |
 | `Dry Run` | `On` | Report without saving or resetting |
 | `Reset After Save` | `Off` | Reset eligible source zones; retain mixed-owner neighbors |
+| `Missing Bundle Entry Policy` | `WarnAndContinue` | Choose `BlockReset` to keep the cluster when a supported object is missing from the archive. Both values log the missing prefab. |
 | `Minimum Pieces Per Cluster` | `5` | Minimum eligible-owner structure count for an archive; see the reset-without-save exception above |
 | `Inactive Days` | `30` | Required absence before normal cleanup |
 | `Scan Interval Minutes` | `0` | Automatic scans are disabled at 0 |
